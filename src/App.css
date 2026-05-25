@@ -52,7 +52,8 @@
 }
 
 input,
-textarea {
+textarea,
+select {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--border);
@@ -69,7 +70,8 @@ textarea {
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -113,6 +115,11 @@ button {
 .ghost {
   color: var(--muted);
   background: transparent;
+}
+
+.compact {
+  min-height: 38px;
+  padding: 8px 10px;
 }
 
 .wide {
@@ -161,6 +168,17 @@ button {
   justify-content: space-between;
   gap: 14px;
   padding: 8px 0 18px;
+}
+
+.account-switcher {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.account-switcher span {
+  color: var(--muted);
+  font-weight: 800;
 }
 
 .topbar h1,
@@ -222,12 +240,127 @@ button {
 }
 
 .session-row span {
+  display: grid;
+  gap: 2px;
   overflow-wrap: anywhere;
+}
+
+.session-row em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
 }
 
 .session-row small {
   color: var(--muted);
   white-space: nowrap;
+}
+
+.account-panel {
+  margin-top: 14px;
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.inline-form label,
+.visibility-box {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.user-list,
+.checkbox-list {
+  display: grid;
+  gap: 8px;
+}
+
+.user-list {
+  margin-top: 14px;
+}
+
+.user-row,
+.check-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.user-row div {
+  display: grid;
+  gap: 2px;
+}
+
+.user-row span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.danger-icon {
+  color: #b42318;
+  background: #fee4e2;
+}
+
+.visibility-box {
+  padding: 12px;
+  background: var(--soft);
+  border-radius: 8px;
+}
+
+.visibility-box > span {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  color: var(--text);
+}
+
+.check-row input {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+}
+
+.segmented {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 12px;
+  background: var(--soft);
+  border-radius: 8px;
+}
+
+.segmented button {
+  min-height: 36px;
+  padding: 8px 12px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.segmented button.active {
+  color: #fff;
+  background: var(--accent);
 }
 
 .link-panel {
@@ -540,12 +673,19 @@ details ol {
 
   .dashboard-grid,
   .details-layout,
+  .inline-form,
   .result-blocks {
     grid-template-columns: 1fr;
   }
 
   .topbar h1 {
     font-size: 28px;
+  }
+
+  .topbar,
+  .account-switcher {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   summary {

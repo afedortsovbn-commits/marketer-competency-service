@@ -7,6 +7,7 @@ import {
   Clock3,
   LogIn,
   LogOut,
+  Trash2,
   Plus,
   QrCode,
   ShieldCheck,
@@ -16,17 +17,9 @@ import {
 } from 'lucide-react'
 import './App.css'
 
-type Direction =
-  | 'performance'
-  | 'analytics'
-  | 'brand'
-  | 'content'
-  | 'crm'
-  | 'product'
-  | 'research'
-  | 'seo'
-  | 'smm'
-  | 'strategy'
+type AssessmentType = 'marketer' | 'analyst'
+
+type Direction = string
 
 type Competency =
   | 'Стратегия'
@@ -70,6 +63,9 @@ type AnswerRecord = {
 type TestSession = {
   id: string
   candidate: Candidate
+  assessmentType: AssessmentType
+  createdBy: string
+  visibleTo: string[]
   createdAt: string
   maxSeconds: number
   status: 'new' | 'in_progress' | 'completed' | 'terminated'
@@ -82,6 +78,8 @@ type TestSession = {
 type UserAccount = {
   login: string
   password: string
+  role: 'owner' | 'user'
+  createdAt: string
 }
 
 type ResultBlock = {
@@ -91,7 +89,7 @@ type ResultBlock = {
   percent: number
 }
 
-const QUESTION_BANK: Question[] = [
+const MARKETER_QUESTIONS: Question[] = [
   {
     id: 'demo',
     text: 'Тестовый вопрос: выберите правильный вариант ответа.',
@@ -755,7 +753,370 @@ const QUESTION_BANK: Question[] = [
   },
 ]
 
-const DIRECTION_LABELS: Record<Direction, string> = {
+const ANALYST_QUESTIONS: Question[] = [
+  {
+    id: 'analyst-demo',
+    text: 'Тестовый вопрос: выберите правильный вариант ответа.',
+    answers: ['Неправильный', 'Правильный', 'Неправильный', 'Не знаю'],
+    correctIndex: 1,
+    competency: 'Софтскилы',
+    direction: 'soft',
+    level: 'junior',
+  },
+  {
+    id: 'ana-001',
+    text: 'Что в аналитике данных означает метрика?',
+    answers: [
+      'Количественный показатель, по которому оценивают процесс или результат',
+      'Любая таблица с исходными данными',
+      'Название презентации для руководителя',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'analytics-core',
+    level: 'junior',
+  },
+  {
+    id: 'ana-002',
+    text: 'Какой SQL-оператор используется для фильтрации строк до группировки?',
+    answers: ['WHERE', 'HAVING', 'ORDER BY', 'Не знаю'],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'sql',
+    level: 'junior',
+  },
+  {
+    id: 'ana-003',
+    text: 'Чем HAVING отличается от WHERE в SQL?',
+    answers: [
+      'HAVING фильтрует результаты после группировки',
+      'HAVING сортирует строки по алфавиту',
+      'HAVING объединяет таблицы без ключей',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'sql',
+    level: 'middle',
+  },
+  {
+    id: 'ana-004',
+    text: 'Что чаще всего означает LEFT JOIN?',
+    answers: [
+      'Все строки из левой таблицы и совпадения из правой',
+      'Только строки, совпавшие в обеих таблицах',
+      'Все строки из правой таблицы без левой',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'sql',
+    level: 'middle',
+  },
+  {
+    id: 'ana-005',
+    text: 'Что такое первичный ключ в таблице?',
+    answers: [
+      'Поле или набор полей, уникально идентифицирующих запись',
+      'Первый столбец на экране',
+      'Любой числовой показатель',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'data-modeling',
+    level: 'junior',
+  },
+  {
+    id: 'ana-006',
+    text: 'Какой график лучше подходит для динамики показателя во времени?',
+    answers: ['Линейный график', 'Круговая диаграмма', 'Облако тегов', 'Не знаю'],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'bi',
+    level: 'junior',
+  },
+  {
+    id: 'ana-007',
+    text: 'Что такое когортный анализ?',
+    answers: [
+      'Сравнение групп пользователей, объединенных общим событием или периодом',
+      'Случайное удаление дублей в таблице',
+      'Сравнение только рекламных баннеров',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'product-analytics',
+    level: 'middle',
+  },
+  {
+    id: 'ana-008',
+    text: 'Что показывает retention?',
+    answers: [
+      'Долю пользователей, вернувшихся или оставшихся активными спустя период',
+      'Количество новых рекламных показов',
+      'Среднюю длину SQL-запроса',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'product-analytics',
+    level: 'middle',
+  },
+  {
+    id: 'ana-009',
+    text: 'Что такое выброс в данных?',
+    answers: [
+      'Значение, сильно отличающееся от основной массы наблюдений',
+      'Обязательная строка итогов',
+      'Любой пропуск в текстовом поле',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'statistics',
+    level: 'junior',
+  },
+  {
+    id: 'ana-010',
+    text: 'Что лучше всего описывает медиану?',
+    answers: [
+      'Значение, которое делит упорядоченный набор данных пополам',
+      'Сумма всех значений',
+      'Самое частое значение',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'statistics',
+    level: 'junior',
+  },
+  {
+    id: 'ana-011',
+    text: 'Что показывает p-value в статистическом тесте?',
+    answers: [
+      'Вероятность получить наблюдаемый или более экстремальный результат при верной нулевой гипотезе',
+      'Гарантию бизнес-успеха гипотезы',
+      'Количество строк в датасете',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'statistics',
+    level: 'senior',
+  },
+  {
+    id: 'ana-012',
+    text: 'Что важно проверить перед выводом по A/B-тесту?',
+    answers: [
+      'Размер выборки, корректность рандомизации, период теста и целевую метрику',
+      'Только цвет кнопки в варианте B',
+      'Только название эксперимента',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'experiments',
+    level: 'senior',
+  },
+  {
+    id: 'ana-013',
+    text: 'Что такое ETL?',
+    answers: [
+      'Извлечение, преобразование и загрузка данных',
+      'Тип диаграммы для презентации',
+      'Метод ручного опроса клиентов',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Маркетинговые операции',
+    direction: 'data-engineering',
+    level: 'middle',
+  },
+  {
+    id: 'ana-014',
+    text: 'Что является хорошей практикой проверки качества данных?',
+    answers: [
+      'Контроль дублей, пропусков, типов данных, диапазонов и полноты',
+      'Сразу строить выводы без проверки источников',
+      'Удалять все нулевые значения без анализа',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Маркетинговые операции',
+    direction: 'data-quality',
+    level: 'middle',
+  },
+  {
+    id: 'ana-015',
+    text: 'Что такое дашборд?',
+    answers: [
+      'Экран с ключевыми показателями и визуализациями для регулярного контроля',
+      'Файл с паролями от баз данных',
+      'Одноразовая заметка в чате',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'bi',
+    level: 'junior',
+  },
+  {
+    id: 'ana-016',
+    text: 'Какой принцип делает дашборд полезнее для руководителя?',
+    answers: [
+      'Показать ключевые метрики, контекст, отклонения и действия',
+      'Добавить как можно больше разноцветных графиков',
+      'Скрыть определения показателей',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Софтскилы',
+    direction: 'communication',
+    level: 'middle',
+  },
+  {
+    id: 'ana-017',
+    text: 'Что такое воронка в продуктовой аналитике?',
+    answers: [
+      'Последовательность шагов пользователя до целевого действия',
+      'Список всех сотрудников продукта',
+      'График расходов по месяцам без этапов',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'product-analytics',
+    level: 'junior',
+  },
+  {
+    id: 'ana-018',
+    text: 'Что означает корреляция?',
+    answers: [
+      'Статистическую связь между переменными, не обязательно причинность',
+      'Доказанную причину изменения показателя',
+      'Случайную ошибку в SQL',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'statistics',
+    level: 'middle',
+  },
+  {
+    id: 'ana-019',
+    text: 'Что должен сделать аналитик, если бизнес-запрос звучит слишком общо?',
+    answers: [
+      'Уточнить решение, метрику, период, сегменты и критерий успеха',
+      'Сразу выгрузить любую большую таблицу',
+      'Отказаться от задачи без обсуждения',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Софтскилы',
+    direction: 'communication',
+    level: 'middle',
+  },
+  {
+    id: 'ana-020',
+    text: 'Что такое витрина данных?',
+    answers: [
+      'Подготовленный набор данных для конкретной аналитической или бизнес-задачи',
+      'Скриншот из BI-системы',
+      'Папка с рекламными макетами',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Маркетинговые операции',
+    direction: 'data-modeling',
+    level: 'middle',
+  },
+  {
+    id: 'ana-021',
+    text: 'Какой подход помогает избежать неверной интерпретации графика?',
+    answers: [
+      'Проверить шкалы, базу расчета, фильтры, период и подписи',
+      'Убрать все подписи ради чистоты дизайна',
+      'Использовать только круговые диаграммы',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Софтскилы',
+    direction: 'bi',
+    level: 'middle',
+  },
+  {
+    id: 'ana-022',
+    text: 'Что такое инцидент качества данных?',
+    answers: [
+      'Ситуация, когда данные стали неполными, неверными, несвоевременными или недоступными',
+      'Запланированное обновление названия отчета',
+      'Любое изменение цвета графика',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Маркетинговые операции',
+    direction: 'data-quality',
+    level: 'senior',
+  },
+  {
+    id: 'ana-023',
+    text: 'Что лучше всего проверяет гипотезу о причинном влиянии изменения продукта?',
+    answers: [
+      'Корректно спланированный эксперимент с контрольной группой',
+      'Один комментарий пользователя',
+      'Рост метрики в любой соседний день',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Аналитика',
+    direction: 'experiments',
+    level: 'senior',
+  },
+  {
+    id: 'ana-024',
+    text: 'Что означает reproducible analysis?',
+    answers: [
+      'Анализ можно повторить и получить тот же результат на тех же данных и правилах',
+      'Презентация выглядит одинаково на всех мониторах',
+      'Запрос нельзя показать коллегам',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Маркетинговые операции',
+    direction: 'analytics-core',
+    level: 'senior',
+  },
+  {
+    id: 'ana-025',
+    text: 'Что является корректным поведением аналитика при обнаружении ошибки в ранее отправленном отчете?',
+    answers: [
+      'Сообщить о проблеме, оценить влияние, исправить данные и объяснить изменения',
+      'Ничего не говорить, если ошибку заметили не все',
+      'Удалить старый отчет без комментария',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Софтскилы',
+    direction: 'soft',
+    level: 'middle',
+  },
+]
+
+const QUESTION_BANKS: Record<AssessmentType, Question[]> = {
+  marketer: MARKETER_QUESTIONS,
+  analyst: ANALYST_QUESTIONS,
+}
+
+const ASSESSMENT_LABELS: Record<AssessmentType, string> = {
+  marketer: 'Маркетолог',
+  analyst: 'Аналитик',
+}
+
+const DIRECTION_LABELS: Record<AssessmentType, Record<string, string>> = {
+  marketer: {
   performance: 'Performance-маркетинг',
   analytics: 'Аналитика',
   brand: 'Бренд',
@@ -765,7 +1126,21 @@ const DIRECTION_LABELS: Record<Direction, string> = {
   research: 'Исследования',
   seo: 'SEO',
   smm: 'SMM',
-  strategy: 'Стратегия',
+    strategy: 'Стратегия',
+  },
+  analyst: {
+    'analytics-core': 'Базовая аналитика',
+    sql: 'SQL',
+    'data-modeling': 'Моделирование данных',
+    bi: 'BI и визуализация',
+    'product-analytics': 'Продуктовая аналитика',
+    statistics: 'Статистика',
+    experiments: 'Эксперименты',
+    'data-engineering': 'Инженерия данных',
+    'data-quality': 'Качество данных',
+    communication: 'Коммуникация',
+    soft: 'Софтскилы',
+  },
 }
 
 const STORAGE_SESSIONS = 'marketer-assessment:sessions'
@@ -791,7 +1166,7 @@ const writeJson = <T,>(key: string, value: T) => {
 
 const getSessions = () => readJson<TestSession[]>(STORAGE_SESSIONS, [])
 const setSessions = (sessions: TestSession[]) => writeJson(STORAGE_SESSIONS, sessions)
-const getUsers = () => readJson<UserAccount[]>(STORAGE_USERS, [])
+const getUsers = () => normalizeUsers(readJson<UserAccount[]>(STORAGE_USERS, []))
 const getActiveUser = () => localStorage.getItem(STORAGE_ACTIVE_USER)
 
 const getRoute = () => {
@@ -800,8 +1175,25 @@ const getRoute = () => {
   return { name: name || 'hr', id }
 }
 
-const getQuestion = (id: string) => QUESTION_BANK.find((question) => question.id === id)
-const scoredQuestions = QUESTION_BANK.filter((question) => question.id !== 'demo')
+const getQuestionBank = (type?: AssessmentType) => QUESTION_BANKS[type ?? 'marketer']
+const getQuestion = (id: string, type?: AssessmentType) =>
+  getQuestionBank(type).find((question) => question.id === id)
+const getScoredQuestions = (type?: AssessmentType) =>
+  getQuestionBank(type).filter((question) => !question.id.endsWith('demo') && question.id !== 'demo')
+const getVisibleSessions = (sessions: TestSession[], login: string) =>
+  sessions.filter(
+    (session) =>
+      !session.visibleTo ||
+      !session.createdBy ||
+      session.createdBy === login ||
+      session.visibleTo.includes(login),
+  )
+const normalizeUsers = (users: UserAccount[]) =>
+  users.map((user, index) => ({
+    ...user,
+    role: user.role ?? (index === 0 ? 'owner' : 'user'),
+    createdAt: user.createdAt ?? new Date().toISOString(),
+  }))
 
 function useStoredSessions() {
   const [sessions, setLocalSessions] = useState<TestSession[]>(() => getSessions())
@@ -827,6 +1219,7 @@ function useStoredSessions() {
 }
 
 function calculateResults(session: TestSession) {
+  const scoredQuestions = getScoredQuestions(session.assessmentType)
   const answerMap = new Map(session.answers.map((answer) => [answer.questionId, answer]))
   const scoredAnswers = scoredQuestions.map((question) => ({
     question,
@@ -856,16 +1249,25 @@ function calculateResults(session: TestSession) {
     [...new Set(scoredQuestions.map((question) => question.competency))],
     (question) => question.competency,
     answerMap,
+    undefined,
+    scoredQuestions,
   )
 
   const directionBlocks = buildBlocks(
-    Object.keys(DIRECTION_LABELS) as Direction[],
+    Object.keys(DIRECTION_LABELS[session.assessmentType ?? 'marketer']),
     (question) => question.direction,
     answerMap,
-    DIRECTION_LABELS,
+    DIRECTION_LABELS[session.assessmentType ?? 'marketer'],
+    scoredQuestions,
   )
 
-  const softBlocks = buildBlocks(['Софтскилы'], (question) => question.competency, answerMap)
+  const softBlocks = buildBlocks(
+    ['Софтскилы'],
+    (question) => question.competency,
+    answerMap,
+    undefined,
+    scoredQuestions,
+  )
   const specialization = [...directionBlocks]
     .filter((block) => block.total > 0)
     .sort((a, b) => b.percent - a.percent || b.correct - a.correct)[0]
@@ -880,7 +1282,9 @@ function calculateResults(session: TestSession) {
     specialization:
       specialization && specialization.percent >= 55
         ? specialization.title
-        : 'Универсальный маркетинг',
+        : session.assessmentType === 'analyst'
+          ? 'Универсальная аналитика'
+          : 'Универсальный маркетинг',
     competencyBlocks,
     directionBlocks,
     softBlocks,
@@ -892,9 +1296,10 @@ function buildBlocks<T extends string>(
   picker: (question: Question) => string,
   answerMap: Map<string, AnswerRecord>,
   labels?: Record<string, string>,
+  sourceQuestions = getScoredQuestions(),
 ): ResultBlock[] {
   return keys.map((key) => {
-    const questions = scoredQuestions.filter((question) => picker(question) === key)
+    const questions = sourceQuestions.filter((question) => picker(question) === key)
     const correct = questions.filter((question) => answerMap.get(question.id)?.isCorrect).length
     return {
       title: labels?.[key] ?? key,
@@ -925,19 +1330,38 @@ function HrApp() {
   const [sessions, saveSessions] = useStoredSessions()
   const [activeLogin, setActiveLogin] = useState(getActiveUser())
   const [authMode, setAuthMode] = useState<'start' | 'login' | 'register'>('start')
-  const [selectedId, setSelectedId] = useState<string | null>(sessions[0]?.id ?? null)
-  const selected = sessions.find((session) => session.id === selectedId) ?? sessions[0]
+  const [users, setUsers] = useState<UserAccount[]>(() => getUsers())
+  const activeUser = users.find((user) => user.login === activeLogin)
+  const isOwner = activeUser?.role === 'owner'
+  const visibleSessions = useMemo(
+    () => (activeLogin ? getVisibleSessions(sessions, activeLogin) : []),
+    [activeLogin, sessions],
+  )
+  const [selectedId, setSelectedId] = useState<string | null>(visibleSessions[0]?.id ?? null)
+  const selected = visibleSessions.find((session) => session.id === selectedId) ?? visibleSessions[0]
 
   useEffect(() => {
-    if (!selectedId && sessions[0]) {
-      window.setTimeout(() => setSelectedId(sessions[0].id), 0)
+    if (!selectedId && visibleSessions[0]) {
+      window.setTimeout(() => setSelectedId(visibleSessions[0].id), 0)
     }
-  }, [selectedId, sessions])
+    if (selectedId && !visibleSessions.some((session) => session.id === selectedId)) {
+      window.setTimeout(() => setSelectedId(visibleSessions[0]?.id ?? null), 0)
+    }
+  }, [selectedId, visibleSessions])
 
-  const createSession = (candidate: Candidate, maxSeconds: number) => {
+  const createSession = (
+    candidate: Candidate,
+    maxSeconds: number,
+    assessmentType: AssessmentType,
+    visibleTo: string[],
+  ) => {
+    if (!activeLogin) return
     const session: TestSession = {
       id: createId(),
       candidate,
+      assessmentType,
+      createdBy: activeLogin,
+      visibleTo: [...new Set([activeLogin, ...visibleTo])],
       createdAt: new Date().toISOString(),
       maxSeconds,
       status: 'new',
@@ -968,6 +1392,32 @@ function HrApp() {
     setAuthMode('start')
   }
 
+  const saveUsers = (nextUsers: UserAccount[]) => {
+    const normalized = normalizeUsers(nextUsers)
+    setUsers(normalized)
+    writeJson(STORAGE_USERS, normalized)
+  }
+
+  const createUser = (login: string, password: string) => {
+    const nextUser: UserAccount = {
+      login,
+      password,
+      role: 'user',
+      createdAt: new Date().toISOString(),
+    }
+    saveUsers([...users, nextUser])
+  }
+
+  const deleteUser = (login: string) => {
+    saveUsers(users.filter((user) => user.login !== login))
+    saveSessions(
+      sessions.map((session) => ({
+        ...session,
+        visibleTo: session.visibleTo?.filter((item) => item !== login) ?? [],
+      })),
+    )
+  }
+
   if (!activeLogin) {
     return (
       <main className="auth-shell">
@@ -975,14 +1425,16 @@ function HrApp() {
           <div className="brand-mark">
             <ShieldCheck size={28} />
           </div>
-          <h1>Оценка компетенций маркетолога</h1>
+          <h1>Оценка компетенций</h1>
           <p>Сервис для HR: ссылки, QR-коды, таймер, мониторинг прохождения и итоговая оценка.</p>
           {authMode === 'start' ? (
             <div className="auth-actions">
-              <button className="primary" type="button" onClick={() => setAuthMode('register')}>
-                <UserPlus size={18} />
-                Зарегистрироваться
-              </button>
+              {!users.length && (
+                <button className="primary" type="button" onClick={() => setAuthMode('register')}>
+                  <UserPlus size={18} />
+                  Создать первый аккаунт
+                </button>
+              )}
               <button className="secondary" type="button" onClick={() => setAuthMode('login')}>
                 <LogIn size={18} />
                 Войти
@@ -994,6 +1446,7 @@ function HrApp() {
               onBack={() => setAuthMode('start')}
               onSuccess={(login) => {
                 localStorage.setItem(STORAGE_ACTIVE_USER, login)
+                setUsers(getUsers())
                 setActiveLogin(login)
               }}
             />
@@ -1008,17 +1461,34 @@ function HrApp() {
       <header className="topbar">
         <div>
           <span className="eyebrow">HR-кабинет</span>
-          <h1>Оценка маркетолога</h1>
+          <h1>Оценка компетенций</h1>
         </div>
-        <button className="icon-button" type="button" title="Выйти" onClick={logout}>
-          <LogOut size={20} />
-        </button>
+        <div className="account-switcher">
+          <span>{activeLogin}</span>
+          <button className="secondary compact" type="button" onClick={logout}>
+            <LogOut size={18} />
+            Сменить аккаунт
+          </button>
+        </div>
       </header>
 
       <section className="dashboard-grid">
-        <CreateSessionForm onCreate={createSession} />
-        <SessionList sessions={sessions} selectedId={selected?.id} onSelect={setSelectedId} />
+        <CreateSessionForm
+          users={users}
+          activeLogin={activeLogin}
+          onCreate={createSession}
+        />
+        <SessionList sessions={visibleSessions} selectedId={selected?.id} onSelect={setSelectedId} />
       </section>
+
+      {isOwner && (
+        <AccountManagement
+          users={users}
+          activeLogin={activeLogin}
+          onCreate={createUser}
+          onDelete={deleteUser}
+        />
+      )}
 
       {selected ? (
         <SessionDetails session={selected} onFinish={finishSession} />
@@ -1066,7 +1536,15 @@ function AuthForm({
         setError('Такой логин уже зарегистрирован.')
         return
       }
-      writeJson(STORAGE_USERS, [...users, { login: normalized, password }])
+      writeJson(STORAGE_USERS, [
+        ...users,
+        {
+          login: normalized,
+          password,
+          role: users.length ? 'user' : 'owner',
+          createdAt: new Date().toISOString(),
+        },
+      ])
       onSuccess(normalized)
       return
     }
@@ -1113,10 +1591,95 @@ function AuthForm({
   )
 }
 
+function AccountManagement({
+  users,
+  activeLogin,
+  onCreate,
+  onDelete,
+}: {
+  users: UserAccount[]
+  activeLogin: string | null
+  onCreate: (login: string, password: string) => void
+  onDelete: (login: string) => void
+}) {
+  const [login, setLogin] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault()
+    const normalized = login.trim()
+    if (!normalized || !password) {
+      setError('Введите логин и пароль нового пользователя.')
+      return
+    }
+    if (users.some((user) => user.login === normalized)) {
+      setError('Такой логин уже есть в системе.')
+      return
+    }
+    onCreate(normalized, password)
+    setLogin('')
+    setPassword('')
+    setError('')
+  }
+
+  return (
+    <section className="panel account-panel">
+      <div className="section-title">
+        <UserPlus size={20} />
+        <h2>Аккаунты админки</h2>
+      </div>
+      <form className="inline-form" onSubmit={submit}>
+        <label>
+          Логин
+          <input value={login} onChange={(event) => setLogin(event.target.value)} />
+        </label>
+        <label>
+          Пароль
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+        <button className="primary" type="submit">
+          <UserPlus size={18} />
+          Создать
+        </button>
+      </form>
+      {error && <p className="error-text">{error}</p>}
+      <div className="user-list">
+        {users.map((user) => (
+          <article className="user-row" key={user.login}>
+            <div>
+              <strong>{user.login}</strong>
+              <span>{user.role === 'owner' ? 'Первый администратор' : 'Пользователь'}</span>
+            </div>
+            {user.role !== 'owner' && user.login !== activeLogin && (
+              <button className="icon-button danger-icon" type="button" title="Удалить" onClick={() => onDelete(user.login)}>
+                <Trash2 size={18} />
+              </button>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function CreateSessionForm({
   onCreate,
+  users,
+  activeLogin,
 }: {
-  onCreate: (candidate: Candidate, maxSeconds: number) => void
+  users: UserAccount[]
+  activeLogin: string | null
+  onCreate: (
+    candidate: Candidate,
+    maxSeconds: number,
+    assessmentType: AssessmentType,
+    visibleTo: string[],
+  ) => void
 }) {
   const [candidate, setCandidate] = useState<Candidate>({
     fullName: '',
@@ -1124,6 +1687,8 @@ function CreateSessionForm({
     contact: '',
     note: '',
   })
+  const [assessmentType, setAssessmentType] = useState<AssessmentType>('marketer')
+  const [visibleTo, setVisibleTo] = useState<string[]>(() => (activeLogin ? [activeLogin] : []))
   const [maxSeconds, setMaxSeconds] = useState(45)
   const [error, setError] = useState('')
 
@@ -1144,10 +1709,23 @@ function CreateSessionForm({
         note: candidate.note.trim(),
       },
       Math.max(10, Math.min(180, maxSeconds)),
+      assessmentType,
+      visibleTo,
     )
     setCandidate({ fullName: '', role: '', contact: '', note: '' })
+    setAssessmentType('marketer')
+    setVisibleTo(activeLogin ? [activeLogin] : [])
     setMaxSeconds(45)
     setError('')
+  }
+
+  const toggleVisibility = (login: string) => {
+    if (login === activeLogin) return
+    setVisibleTo((current) =>
+      current.includes(login)
+        ? current.filter((item) => item !== login)
+        : [...current, login],
+    )
   }
 
   return (
@@ -1158,6 +1736,16 @@ function CreateSessionForm({
       </div>
       <form className="stack-form" onSubmit={submit}>
         <label>
+          Позиция для опроса
+          <select
+            value={assessmentType}
+            onChange={(event) => setAssessmentType(event.target.value as AssessmentType)}
+          >
+            <option value="marketer">Маркетолог</option>
+            <option value="analyst">Аналитик</option>
+          </select>
+        </label>
+        <label>
           ФИО
           <input
             placeholder="Например, Анна Петрова"
@@ -1166,9 +1754,9 @@ function CreateSessionForm({
           />
         </label>
         <label>
-          Позиция
+          Комментарий по позиции
           <input
-            placeholder="Маркетолог, performance-специалист"
+            placeholder="Например, junior-аналитик или performance-специалист"
             value={candidate.role}
             onChange={(event) => update('role', event.target.value)}
           />
@@ -1200,6 +1788,22 @@ function CreateSessionForm({
             onChange={(event) => setMaxSeconds(Number(event.target.value))}
           />
         </label>
+        <div className="visibility-box">
+          <span>Кому виден соискатель</span>
+          <div className="checkbox-list">
+            {users.map((user) => (
+              <label className="check-row" key={user.login}>
+                <input
+                  type="checkbox"
+                  checked={visibleTo.includes(user.login) || user.login === activeLogin}
+                  disabled={user.login === activeLogin}
+                  onChange={() => toggleVisibility(user.login)}
+                />
+                {user.login}
+              </label>
+            ))}
+          </div>
+        </div>
         {error && <p className="error-text">{error}</p>}
         <button className="primary" type="submit">
           <QrCode size={18} />
@@ -1233,7 +1837,10 @@ function SessionList({
             type="button"
             onClick={() => onSelect(session.id)}
           >
-            <span>{session.candidate.fullName}</span>
+            <span>
+              {session.candidate.fullName}
+              <em>{ASSESSMENT_LABELS[session.assessmentType ?? 'marketer']}</em>
+            </span>
             <small>{statusLabel(session.status)}</small>
           </button>
         ))}
@@ -1256,7 +1863,8 @@ function SessionDetails({
     return `${base}#/test/${session.id}`
   }, [session.id])
   const result = calculateResults(session)
-  const currentQuestion = QUESTION_BANK[session.currentIndex]
+  const questions = getQuestionBank(session.assessmentType)
+  const currentQuestion = questions[session.currentIndex]
   const canFinish = session.status === 'new' || session.status === 'in_progress'
 
   useEffect(() => {
@@ -1283,6 +1891,14 @@ function SessionDetails({
         </div>
         <dl className="meta-grid">
           <div>
+            <dt>Опрос</dt>
+            <dd>{ASSESSMENT_LABELS[session.assessmentType ?? 'marketer']}</dd>
+          </div>
+          <div>
+            <dt>Создал</dt>
+            <dd>{session.createdBy ?? 'Не указано'}</dd>
+          </div>
+          <div>
             <dt>ФИО</dt>
             <dd>{session.candidate.fullName}</dd>
           </div>
@@ -1297,7 +1913,7 @@ function SessionDetails({
           <div>
             <dt>Ответы</dt>
             <dd>
-              {session.answers.length}/{QUESTION_BANK.length}
+              {session.answers.length}/{questions.length}
             </dd>
           </div>
         </dl>
@@ -1324,7 +1940,7 @@ function SessionDetails({
         </div>
         <div className="answer-log">
           {session.answers.map((answer, index) => {
-            const question = getQuestion(answer.questionId)
+            const question = getQuestion(answer.questionId, session.assessmentType)
             return (
               <article className="answer-item" key={`${answer.questionId}-${index}`}>
                 <div>
@@ -1349,18 +1965,32 @@ function SessionDetails({
 }
 
 function QuestionCatalog() {
+  const [type, setType] = useState<AssessmentType>('marketer')
+  const questions = getQuestionBank(type)
   return (
     <section className="panel catalog-panel">
       <div className="section-title">
         <Square size={19} />
         <h2>Банк вопросов</h2>
       </div>
+      <div className="segmented">
+        {(Object.keys(ASSESSMENT_LABELS) as AssessmentType[]).map((item) => (
+          <button
+            className={item === type ? 'active' : ''}
+            key={item}
+            type="button"
+            onClick={() => setType(item)}
+          >
+            {ASSESSMENT_LABELS[item]}
+          </button>
+        ))}
+      </div>
       <p className="muted">
-        {QUESTION_BANK.length} вопросов, включая первый тестовый. Редактирование закрыто, логика
+        {questions.length} вопросов, включая первый тестовый. Редактирование закрыто, логика
         оценки зашита в сервисе.
       </p>
       <div className="question-list">
-        {QUESTION_BANK.map((question, index) => (
+        {questions.map((question, index) => (
           <details key={question.id}>
             <summary>
               <span>{index + 1}. {question.text}</span>
@@ -1390,7 +2020,8 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
   const [questionStartedAt, setQuestionStartedAt] = useState(Date.now())
   const [savedFlash, setSavedFlash] = useState(false)
 
-  const currentQuestion = session ? QUESTION_BANK[session.currentIndex] : undefined
+  const questions = session ? getQuestionBank(session.assessmentType) : []
+  const currentQuestion = session ? questions[session.currentIndex] : undefined
   const finished = session?.status === 'completed'
   const terminated = session?.status === 'terminated'
 
@@ -1457,9 +2088,9 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
           spentSeconds,
         },
       ],
-      currentIndex: Math.min(nextIndex, QUESTION_BANK.length - 1),
-      status: nextIndex >= QUESTION_BANK.length ? 'completed' : 'in_progress',
-      finishedAt: nextIndex >= QUESTION_BANK.length ? new Date().toISOString() : current.finishedAt,
+      currentIndex: Math.min(nextIndex, questions.length - 1),
+      status: nextIndex >= questions.length ? 'completed' : 'in_progress',
+      finishedAt: nextIndex >= questions.length ? new Date().toISOString() : current.finishedAt,
     }))
     setSavedFlash(true)
     window.setTimeout(() => setSavedFlash(false), 450)
@@ -1485,7 +2116,7 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
   if (session.status === 'new') {
     return (
       <main className="candidate-shell centered">
-        <span className="eyebrow">Оценка компетенций</span>
+        <span className="eyebrow">Оценка компетенций: {ASSESSMENT_LABELS[session.assessmentType ?? 'marketer']}</span>
         <h1>{session.candidate.fullName}</h1>
         <p>Ответ выбирается одним касанием. Первый вопрос тестовый и нужен только для знакомства с интерфейсом.</p>
         <button className="primary wide" type="button" onClick={start}>
@@ -1500,12 +2131,12 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
       <section className="question-screen">
         <div className="question-progress">
           <span>
-            Вопрос {session.currentIndex + 1} из {QUESTION_BANK.length}
+            Вопрос {session.currentIndex + 1} из {questions.length}
           </span>
           <strong>{secondsLeft} сек.</strong>
         </div>
         <div className="progress-bar">
-          <span style={{ width: `${((session.currentIndex + 1) / QUESTION_BANK.length) * 100}%` }} />
+          <span style={{ width: `${((session.currentIndex + 1) / questions.length) * 100}%` }} />
         </div>
         <h1>{currentQuestion?.text}</h1>
         <div className="answer-options">
