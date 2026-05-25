@@ -16,6 +16,12 @@ import {
   UserPlus,
 } from 'lucide-react'
 import './App.css'
+import {
+  firebaseEnabled,
+  readRemoteState,
+  saveRemoteState,
+  subscribeRemoteState,
+} from './realtime'
 
 type AssessmentType = 'marketer' | 'analyst' | 'skills'
 
@@ -1525,8 +1531,16 @@ const writeJson = <T,>(key: string, value: T) => {
 }
 
 const getSessions = () => readJson<TestSession[]>(STORAGE_SESSIONS, [])
-const setSessions = (sessions: TestSession[]) => writeJson(STORAGE_SESSIONS, sessions)
+const setSessions = (sessions: TestSession[]) => {
+  writeJson(STORAGE_SESSIONS, sessions)
+  if (firebaseEnabled) void saveRemoteState('sessions', sessions)
+}
 const getUsers = () => normalizeUsers(readJson<UserAccount[]>(STORAGE_USERS, []))
+const setStoredUsers = (users: UserAccount[]) => {
+  const normalized = normalizeUsers(users)
+  writeJson(STORAGE_USERS, normalized)
+  if (firebaseEnabled) void saveRemoteState('users', normalized)
+}
 const getActiveUser = () => localStorage.getItem(STORAGE_ACTIVE_USER)
 
 const getRoute = () => {
@@ -1570,12 +1584,84 @@ function useStoredSessions() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!firebaseEnabled) return undefined
+    let stopped = false
+    void readRemoteState<TestSession[]>('sessions', []).then((remoteSessions) => {
+      if (stopped) return
+      const localSessions = getSessions()
+      if (!remoteSessions.length && localSessions.length) {
+        void saveRemoteState('sessions', localSessions)
+        setLocalSessions(localSessions)
+        return
+      }
+      setLocalSessions(remoteSessions)
+      writeJson(STORAGE_SESSIONS, remoteSessions)
+    })
+    const unsubscribe = subscribeRemoteState<TestSession[]>('sessions', [], (remoteSessions) => {
+      setLocalSessions(remoteSessions)
+      writeJson(STORAGE_SESSIONS, remoteSessions)
+    })
+    return () => {
+      stopped = true
+      unsubscribe()
+    }
+  }, [])
+
   const save = (next: TestSession[]) => {
     setLocalSessions(next)
     setSessions(next)
   }
 
   return [sessions, save] as const
+}
+
+function useStoredUsers() {
+  const [users, setLocalUsers] = useState<UserAccount[]>(() => getUsers())
+
+  useEffect(() => {
+    const sync = () => setLocalUsers(getUsers())
+    window.addEventListener('storage', sync)
+    window.addEventListener('assessment-storage', sync)
+    return () => {
+      window.removeEventListener('storage', sync)
+      window.removeEventListener('assessment-storage', sync)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!firebaseEnabled) return undefined
+    let stopped = false
+    void readRemoteState<UserAccount[]>('users', []).then((remoteUsers) => {
+      if (stopped) return
+      const localUsers = getUsers()
+      if (!remoteUsers.length && localUsers.length) {
+        void saveRemoteState('users', localUsers)
+        setLocalUsers(localUsers)
+        return
+      }
+      const normalized = normalizeUsers(remoteUsers)
+      setLocalUsers(normalized)
+      writeJson(STORAGE_USERS, normalized)
+    })
+    const unsubscribe = subscribeRemoteState<UserAccount[]>('users', [], (remoteUsers) => {
+      const normalized = normalizeUsers(remoteUsers)
+      setLocalUsers(normalized)
+      writeJson(STORAGE_USERS, normalized)
+    })
+    return () => {
+      stopped = true
+      unsubscribe()
+    }
+  }, [])
+
+  const save = (nextUsers: UserAccount[]) => {
+    const normalized = normalizeUsers(nextUsers)
+    setLocalUsers(normalized)
+    setStoredUsers(normalized)
+  }
+
+  return [users, save] as const
 }
 
 function calculateResults(session: TestSession) {
@@ -1691,9 +1777,9 @@ function App() {
 
 function HrApp() {
   const [sessions, saveSessions] = useStoredSessions()
+  const [users, saveStoredUsers] = useStoredUsers()
   const [activeLogin, setActiveLogin] = useState(getActiveUser())
   const [authMode, setAuthMode] = useState<'start' | 'login' | 'register'>('start')
-  const [users, setUsers] = useState<UserAccount[]>(() => getUsers())
   const activeUser = users.find((user) => user.login === activeLogin)
   const isOwner = activeUser?.role === 'owner'
   const visibleSessions = useMemo(
@@ -1756,9 +1842,7 @@ function HrApp() {
   }
 
   const saveUsers = (nextUsers: UserAccount[]) => {
-    const normalized = normalizeUsers(nextUsers)
-    setUsers(normalized)
-    writeJson(STORAGE_USERS, normalized)
+    saveStoredUsers(nextUsers)
   }
 
   const createUser = (login: string, password: string) => {
@@ -1806,10 +1890,11 @@ function HrApp() {
           ) : (
             <AuthForm
               mode={authMode}
+              users={users}
+              onRegister={saveStoredUsers}
               onBack={() => setAuthMode('start')}
               onSuccess={(login) => {
                 localStorage.setItem(STORAGE_ACTIVE_USER, login)
-                setUsers(getUsers())
                 setActiveLogin(login)
               }}
             />
@@ -1870,10 +1955,14 @@ function HrApp() {
 
 function AuthForm({
   mode,
+  users,
+  onRegister,
   onBack,
   onSuccess,
 }: {
   mode: 'login' | 'register'
+  users: UserAccount[]
+  onRegister: (users: UserAccount[]) => void
   onBack: () => void
   onSuccess: (login: string) => void
 }) {
@@ -1884,7 +1973,6 @@ function AuthForm({
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
-    const users = getUsers()
     const normalized = login.trim()
     if (!normalized || !password) {
       setError('Введите логин и пароль.')
@@ -1899,7 +1987,7 @@ function AuthForm({
         setError('Такой логин уже зарегистрирован.')
         return
       }
-      writeJson(STORAGE_USERS, [
+      onRegister([
         ...users,
         {
           login: normalized,
