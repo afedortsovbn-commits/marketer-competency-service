@@ -17,7 +17,7 @@ import {
 } from 'lucide-react'
 import './App.css'
 
-type AssessmentType = 'marketer' | 'analyst'
+type AssessmentType = 'marketer' | 'analyst' | 'skills'
 
 type Direction = string
 
@@ -34,6 +34,10 @@ type Competency =
   | 'SMM'
   | 'Маркетинговые операции'
   | 'Софтскилы'
+  | 'IQ и логика'
+  | 'Глубина мышления'
+  | 'Внимательность'
+  | 'Глубина проработки'
 
 type Question = {
   id: string
@@ -1105,14 +1109,359 @@ const ANALYST_QUESTIONS: Question[] = [
   },
 ]
 
+const SKILLS_QUESTIONS: Question[] = [
+  {
+    id: 'skills-demo',
+    text: 'Тестовый вопрос: выберите правильный вариант ответа.',
+    answers: ['Неправильный', 'Правильный', 'Неправильный', 'Не знаю'],
+    correctIndex: 1,
+    competency: 'Софтскилы',
+    direction: 'interface',
+    level: 'junior',
+  },
+  {
+    id: 'skl-001',
+    text: 'Если все отчеты с ошибками требуют перепроверки, а отчет А содержит ошибку, какой вывод корректен?',
+    answers: [
+      'Отчет А требует перепроверки',
+      'Отчет А точно неверен полностью',
+      'Все отчеты без ошибок не нужны',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'IQ и логика',
+    direction: 'logic',
+    level: 'junior',
+  },
+  {
+    id: 'skl-002',
+    text: 'В последовательности 3, 6, 12, 24 следующим числом будет...',
+    answers: ['48', '36', '30', 'Не знаю'],
+    correctIndex: 0,
+    competency: 'IQ и логика',
+    direction: 'logic',
+    level: 'junior',
+  },
+  {
+    id: 'skl-003',
+    text: 'Что лучше всего проверяет глубину мышления при разборе бизнес-проблемы?',
+    answers: [
+      'Поиск причин, ограничений, альтернатив и последствий решения',
+      'Быстрое согласие с первым объяснением',
+      'Выбор самого простого графика без анализа',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина мышления',
+    direction: 'deep-thinking',
+    level: 'middle',
+  },
+  {
+    id: 'skl-004',
+    text: 'Какая формулировка является наиболее точной для проверки гипотезы?',
+    answers: [
+      'Если изменить X для сегмента Y, то метрика Z изменится на N за период T',
+      'Надо что-то улучшить в продукте',
+      'Кажется, пользователям понравится',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина проработки',
+    direction: 'problem-framing',
+    level: 'middle',
+  },
+  {
+    id: 'skl-005',
+    text: 'В задаче указано: “сравнить май и июнь”, но в таблице есть данные за июль. Что стоит сделать?',
+    answers: [
+      'Уточнить период и исключить июль из расчета, если он не нужен',
+      'Включить июль без комментария',
+      'Удалить все данные за май',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Внимательность',
+    direction: 'attention',
+    level: 'junior',
+  },
+  {
+    id: 'skl-006',
+    text: 'Что является признаком поверхностной проработки вопроса?',
+    answers: [
+      'Вывод сделан без проверки источников, допущений и альтернатив',
+      'Описаны ограничения анализа',
+      'Проверены исходные данные',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина проработки',
+    direction: 'thoroughness',
+    level: 'junior',
+  },
+  {
+    id: 'skl-007',
+    text: 'Как лучше действовать, если в условии задачи есть противоречие?',
+    answers: [
+      'Зафиксировать противоречие и уточнить условие до расчета',
+      'Выбрать удобную трактовку и промолчать',
+      'Сделать два случайных расчета',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Внимательность',
+    direction: 'attention',
+    level: 'middle',
+  },
+  {
+    id: 'skl-008',
+    text: 'Что лучше всего отличает причинно-следственную связь от простого совпадения?',
+    answers: [
+      'Наличие проверяемого механизма, контроля факторов и подходящего дизайна проверки',
+      'Одинаковое направление двух графиков',
+      'Личное ощущение уверенности',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина мышления',
+    direction: 'causal-thinking',
+    level: 'senior',
+  },
+  {
+    id: 'skl-009',
+    text: 'Если задача срочная, но входные данные неполные, какой ответ наиболее профессионален?',
+    answers: [
+      'Сказать, что можно оценить сейчас, какие есть ограничения и что нужно дозапросить',
+      'Сделать вид, что данных достаточно',
+      'Отложить задачу без ответа',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина проработки',
+    direction: 'thoroughness',
+    level: 'middle',
+  },
+  {
+    id: 'skl-010',
+    text: 'Что является лучшим способом снизить риск ошибки в важном расчете?',
+    answers: [
+      'Сверить формулы, крайние значения, итоги и сделать независимую проверку',
+      'Увеличить размер шрифта в таблице',
+      'Отправить расчет сразу после первой версии',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Внимательность',
+    direction: 'attention',
+    level: 'middle',
+  },
+  {
+    id: 'skl-011',
+    text: 'Какой вопрос лучше всего помогает раскрыть первопричину проблемы?',
+    answers: [
+      'Почему это произошло, и какие факты подтверждают каждую причину?',
+      'Кто виноват?',
+      'Можно ли быстрее закрыть задачу?',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина мышления',
+    direction: 'root-cause',
+    level: 'middle',
+  },
+  {
+    id: 'skl-012',
+    text: 'Что означает “проверить допущения” в аналитической задаче?',
+    answers: [
+      'Явно перечислить предположения и оценить, как они влияют на вывод',
+      'Скрыть спорные места из результата',
+      'Заменить данные мнением эксперта',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина мышления',
+    direction: 'deep-thinking',
+    level: 'middle',
+  },
+  {
+    id: 'skl-013',
+    text: 'В условии: “не учитывать повторные заявки”. В таблице есть дубли по одному клиенту. Что корректно?',
+    answers: [
+      'Дедуплицировать заявки по согласованному правилу',
+      'Посчитать все строки как разные заявки',
+      'Удалить всех клиентов с дублями',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Внимательность',
+    direction: 'attention',
+    level: 'middle',
+  },
+  {
+    id: 'skl-014',
+    text: 'Что лучше всего показывает высокий уровень IQ в рабочей задаче?',
+    answers: [
+      'Способность быстро увидеть структуру задачи, закономерности и логические ограничения',
+      'Использование сложных слов без результата',
+      'Уверенность без проверки фактов',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'IQ и логика',
+    direction: 'logic',
+    level: 'middle',
+  },
+  {
+    id: 'skl-015',
+    text: 'Если вывод зависит от одной спорной метрики, что нужно сделать?',
+    answers: [
+      'Проверить определение метрики и показать чувствительность вывода к ней',
+      'Убрать метрику из описания',
+      'Оставить только красивый график',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина проработки',
+    direction: 'thoroughness',
+    level: 'senior',
+  },
+  {
+    id: 'skl-016',
+    text: 'Какая реакция лучше всего демонстрирует внимательность к деталям?',
+    answers: [
+      'Заметить расхождение единиц измерения и уточнить расчет',
+      'Игнорировать мелкие подписи',
+      'Считать проценты и рубли одним показателем',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Внимательность',
+    direction: 'attention',
+    level: 'junior',
+  },
+  {
+    id: 'skl-017',
+    text: 'Что является признаком зрелого мышления в неопределенной задаче?',
+    answers: [
+      'Разделить известное, неизвестное, риски и план проверки',
+      'Сразу дать точный ответ без данных',
+      'Отказаться думать без полного ТЗ',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина мышления',
+    direction: 'deep-thinking',
+    level: 'senior',
+  },
+  {
+    id: 'skl-018',
+    text: 'Какой подход лучше всего помогает не пропустить важное требование?',
+    answers: [
+      'Составить чек-лист условий задачи и сверить результат перед отправкой',
+      'Держать все требования в памяти',
+      'Проверять только заголовок задачи',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Внимательность',
+    direction: 'attention',
+    level: 'middle',
+  },
+  {
+    id: 'skl-019',
+    text: 'Что лучше всего отражает глубину проработки рекомендации?',
+    answers: [
+      'Есть вывод, аргументы, ограничения, риски, альтернативы и следующий шаг',
+      'Есть только общий вывод',
+      'Есть только ссылка на таблицу',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина проработки',
+    direction: 'thoroughness',
+    level: 'senior',
+  },
+  {
+    id: 'skl-020',
+    text: 'Какая ошибка чаще всего возникает при невнимательном чтении задачи?',
+    answers: [
+      'Ответ соответствует похожей, но не фактически заданной задаче',
+      'Ответ содержит ограничения анализа',
+      'Ответ показывает источники данных',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Внимательность',
+    direction: 'attention',
+    level: 'junior',
+  },
+  {
+    id: 'skl-021',
+    text: 'Что лучше всего проверяет способность к абстрактному мышлению?',
+    answers: [
+      'Умение выделить общий принцип из разных частных случаев',
+      'Запоминание одного примера без переноса',
+      'Повторение формулировки задачи',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'IQ и логика',
+    direction: 'abstract-thinking',
+    level: 'middle',
+  },
+  {
+    id: 'skl-022',
+    text: 'Что нужно сделать перед финальным ответом на сложный вопрос?',
+    answers: [
+      'Проверить, отвечает ли вывод на исходный вопрос и не нарушены ли условия',
+      'Добавить больше текста без проверки',
+      'Сменить тему на более простую',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина проработки',
+    direction: 'problem-framing',
+    level: 'middle',
+  },
+  {
+    id: 'skl-023',
+    text: 'Что является корректным выводом, если данных недостаточно для уверенного решения?',
+    answers: [
+      'Дать предварительный вывод с уровнем уверенности и списком недостающих данных',
+      'Сформулировать вывод как доказанный факт',
+      'Скрыть недостаток данных',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Глубина мышления',
+    direction: 'deep-thinking',
+    level: 'senior',
+  },
+  {
+    id: 'skl-024',
+    text: 'Что лучше всего оценивает способность внимательно работать с формулировками?',
+    answers: [
+      'Умение отличить “не менее”, “более”, “до” и “включительно” в условиях',
+      'Скорость печати ответа',
+      'Количество синонимов в тексте',
+      'Не знаю',
+    ],
+    correctIndex: 0,
+    competency: 'Внимательность',
+    direction: 'attention',
+    level: 'middle',
+  },
+]
+
 const QUESTION_BANKS: Record<AssessmentType, Question[]> = {
   marketer: MARKETER_QUESTIONS,
   analyst: ANALYST_QUESTIONS,
+  skills: SKILLS_QUESTIONS,
 }
 
 const ASSESSMENT_LABELS: Record<AssessmentType, string> = {
   marketer: 'Маркетолог',
   analyst: 'Аналитик',
+  skills: 'Навыки',
 }
 
 const DIRECTION_LABELS: Record<AssessmentType, Record<string, string>> = {
@@ -1140,6 +1489,17 @@ const DIRECTION_LABELS: Record<AssessmentType, Record<string, string>> = {
     'data-quality': 'Качество данных',
     communication: 'Коммуникация',
     soft: 'Софтскилы',
+  },
+  skills: {
+    interface: 'Интерфейс',
+    logic: 'IQ и логика',
+    'abstract-thinking': 'Абстрактное мышление',
+    'deep-thinking': 'Глубина мышления',
+    'causal-thinking': 'Причинное мышление',
+    'root-cause': 'Первопричины',
+    attention: 'Внимательность',
+    thoroughness: 'Глубина проработки',
+    'problem-framing': 'Постановка вопроса',
   },
 }
 
@@ -1279,12 +1639,15 @@ function calculateResults(session: TestSession) {
     grade,
     seniorCorrect,
     leadCorrect,
+    assessmentType: session.assessmentType,
     specialization:
       specialization && specialization.percent >= 55
         ? specialization.title
-        : session.assessmentType === 'analyst'
-          ? 'Универсальная аналитика'
-          : 'Универсальный маркетинг',
+        : session.assessmentType === 'skills'
+          ? 'Сбалансированный профиль навыков'
+          : session.assessmentType === 'analyst'
+            ? 'Универсальная аналитика'
+            : 'Универсальный маркетинг',
     competencyBlocks,
     directionBlocks,
     softBlocks,
@@ -1743,6 +2106,7 @@ function CreateSessionForm({
           >
             <option value="marketer">Маркетолог</option>
             <option value="analyst">Аналитик</option>
+            <option value="skills">Навыки</option>
           </select>
         </label>
         <label>
@@ -2163,12 +2527,18 @@ function ResultsPanel({ result, title }: { result: ReturnType<typeof calculateRe
         <span>{result.percent}%</span>
         <div>
           <strong>{result.grade}</strong>
-          <p>Рекомендуемая специализация: {result.specialization}</p>
+          <p>
+            {result.assessmentType === 'skills' ? 'Самый сильный навык' : 'Рекомендуемая специализация'}:{' '}
+            {result.specialization}
+          </p>
         </div>
       </div>
       <div className="result-blocks">
         <ResultGroup title="Компетенции" blocks={result.competencyBlocks} />
-        <ResultGroup title="Направления маркетинга" blocks={result.directionBlocks} />
+        <ResultGroup
+          title={result.assessmentType === 'skills' ? 'Навыки' : 'Направления'}
+          blocks={result.directionBlocks}
+        />
         <ResultGroup title="Софтскилы" blocks={result.softBlocks} />
       </div>
     </section>
