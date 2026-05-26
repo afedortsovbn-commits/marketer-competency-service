@@ -1530,7 +1530,7 @@ const writeJson = <T,>(key: string, value: T) => {
   window.dispatchEvent(new Event('assessment-storage'))
 }
 
-const getSessions = () => readJson<TestSession[]>(STORAGE_SESSIONS, [])
+const getSessions = () => normalizeSessions(readJson<unknown>(STORAGE_SESSIONS, []))
 const setSessions = (sessions: TestSession[]) => {
   writeJson(STORAGE_SESSIONS, sessions)
   if (firebaseEnabled) void saveRemoteState('sessions', sessions)
@@ -1554,6 +1554,19 @@ const getQuestion = (id: string, type?: AssessmentType) =>
   getQuestionBank(type).find((question) => question.id === id)
 const getScoredQuestions = (type?: AssessmentType) =>
   getQuestionBank(type).filter((question) => !question.id.endsWith('demo') && question.id !== 'demo')
+const toList = <T,>(value: unknown): T[] => {
+  if (Array.isArray(value)) return value.filter(Boolean) as T[]
+  if (value && typeof value === 'object') return Object.values(value).filter(Boolean) as T[]
+  return []
+}
+const normalizeSessions = (sessions: unknown) =>
+  toList<TestSession>(sessions).map((session) => ({
+    ...session,
+    assessmentType: session.assessmentType ?? 'marketer',
+    createdBy: session.createdBy ?? '',
+    visibleTo: Array.isArray(session.visibleTo) ? session.visibleTo : toList<string>(session.visibleTo),
+    answers: Array.isArray(session.answers) ? session.answers : toList<AnswerRecord>(session.answers),
+  }))
 const getVisibleSessions = (sessions: TestSession[], login: string) =>
   sessions.filter(
     (session) =>
@@ -1562,8 +1575,8 @@ const getVisibleSessions = (sessions: TestSession[], login: string) =>
       session.createdBy === login ||
       session.visibleTo.includes(login),
   )
-const normalizeUsers = (users: UserAccount[]) =>
-  users.map((user, index) => ({
+const normalizeUsers = (users: unknown) =>
+  toList<UserAccount>(users).map((user, index) => ({
     ...user,
     role: user.role ?? (index === 0 ? 'owner' : 'user'),
     createdAt: user.createdAt ?? new Date().toISOString(),
@@ -1587,8 +1600,9 @@ function useStoredSessions() {
   useEffect(() => {
     if (!firebaseEnabled) return undefined
     let stopped = false
-    void readRemoteState<TestSession[]>('sessions', []).then((remoteSessions) => {
+    void readRemoteState<unknown>('sessions', []).then((remoteValue) => {
       if (stopped) return
+      const remoteSessions = normalizeSessions(remoteValue)
       const localSessions = getSessions()
       if (!remoteSessions.length && localSessions.length) {
         void saveRemoteState('sessions', localSessions)
@@ -1598,7 +1612,8 @@ function useStoredSessions() {
       setLocalSessions(remoteSessions)
       writeJson(STORAGE_SESSIONS, remoteSessions)
     })
-    const unsubscribe = subscribeRemoteState<TestSession[]>('sessions', [], (remoteSessions) => {
+    const unsubscribe = subscribeRemoteState<unknown>('sessions', [], (remoteValue) => {
+      const remoteSessions = normalizeSessions(remoteValue)
       setLocalSessions(remoteSessions)
       writeJson(STORAGE_SESSIONS, remoteSessions)
     })
@@ -1618,6 +1633,7 @@ function useStoredSessions() {
 
 function useStoredUsers() {
   const [users, setLocalUsers] = useState<UserAccount[]>(() => getUsers())
+  const [ready, setReady] = useState(!firebaseEnabled)
 
   useEffect(() => {
     const sync = () => setLocalUsers(getUsers())
@@ -1632,22 +1648,26 @@ function useStoredUsers() {
   useEffect(() => {
     if (!firebaseEnabled) return undefined
     let stopped = false
-    void readRemoteState<UserAccount[]>('users', []).then((remoteUsers) => {
+    void readRemoteState<unknown>('users', []).then((remoteValue) => {
       if (stopped) return
+      const remoteUsers = normalizeUsers(toList<UserAccount>(remoteValue))
       const localUsers = getUsers()
       if (!remoteUsers.length && localUsers.length) {
         void saveRemoteState('users', localUsers)
         setLocalUsers(localUsers)
+        setReady(true)
         return
       }
       const normalized = normalizeUsers(remoteUsers)
       setLocalUsers(normalized)
       writeJson(STORAGE_USERS, normalized)
+      setReady(true)
     })
-    const unsubscribe = subscribeRemoteState<UserAccount[]>('users', [], (remoteUsers) => {
-      const normalized = normalizeUsers(remoteUsers)
+    const unsubscribe = subscribeRemoteState<unknown>('users', [], (remoteValue) => {
+      const normalized = normalizeUsers(toList<UserAccount>(remoteValue))
       setLocalUsers(normalized)
       writeJson(STORAGE_USERS, normalized)
+      setReady(true)
     })
     return () => {
       stopped = true
@@ -1661,7 +1681,7 @@ function useStoredUsers() {
     setStoredUsers(normalized)
   }
 
-  return [users, save] as const
+  return [users, save, ready] as const
 }
 
 function calculateResults(session: TestSession) {
@@ -1777,7 +1797,7 @@ function App() {
 
 function HrApp() {
   const [sessions, saveSessions] = useStoredSessions()
-  const [users, saveStoredUsers] = useStoredUsers()
+  const [users, saveStoredUsers, usersReady] = useStoredUsers()
   const [activeLogin, setActiveLogin] = useState(getActiveUser())
   const [authMode, setAuthMode] = useState<'start' | 'login' | 'register'>('start')
   const activeUser = users.find((user) => user.login === activeLogin)
@@ -1874,7 +1894,9 @@ function HrApp() {
           </div>
           <h1>Оценка компетенций</h1>
           <p>Сервис для HR: ссылки, QR-коды, таймер, мониторинг прохождения и итоговая оценка.</p>
-          {authMode === 'start' ? (
+          {!usersReady ? (
+            <div className="loading-box">Загружаем аккаунты...</div>
+          ) : authMode === 'start' ? (
             <div className="auth-actions">
               {!users.length && (
                 <button className="primary" type="button" onClick={() => setAuthMode('register')}>

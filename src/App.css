@@ -141,6 +141,16 @@ button {
   font-weight: 700;
 }
 
+.loading-box {
+  margin-top: 22px;
+  padding: 12px;
+  color: var(--muted);
+  background: var(--soft);
+  border-radius: 8px;
+  font-weight: 800;
+  text-align: center;
+}
+
 .muted {
   color: var(--muted);
 }
