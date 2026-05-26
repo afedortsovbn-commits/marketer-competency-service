@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import QRCode from 'qrcode'
 import {
-  BarChart3,
+  ChevronDown,
   CheckCircle2,
   ClipboardCopy,
-  Clock3,
-  LogIn,
   LogOut,
   Trash2,
   Plus,
@@ -72,6 +70,7 @@ type AnswerRecord = {
 
 type TestSession = {
   id: string
+  candidateId?: string
   candidate: Candidate
   assessmentType: AssessmentType
   createdBy: string
@@ -97,6 +96,15 @@ type ResultBlock = {
   total: number
   correct: number
   percent: number
+}
+
+type CandidateGroup = {
+  id: string
+  candidate: Candidate
+  createdAt: string
+  createdBy: string
+  visibleTo: string[]
+  sessions: TestSession[]
 }
 
 const MARKETER_QUESTIONS: Question[] = [
@@ -1469,6 +1477,7 @@ const ASSESSMENT_LABELS: Record<AssessmentType, string> = {
   analyst: 'Аналитик',
   skills: 'Навыки',
 }
+const ASSESSMENT_TYPES = Object.keys(ASSESSMENT_LABELS) as AssessmentType[]
 
 const DIRECTION_LABELS: Record<AssessmentType, Record<string, string>> = {
   marketer: {
@@ -1562,6 +1571,7 @@ const toList = <T,>(value: unknown): T[] => {
 const normalizeSessions = (sessions: unknown) =>
   toList<TestSession>(sessions).map((session) => ({
     ...session,
+    candidateId: session.candidateId ?? session.id,
     assessmentType: session.assessmentType ?? 'marketer',
     createdBy: session.createdBy ?? '',
     visibleTo: Array.isArray(session.visibleTo) ? session.visibleTo : toList<string>(session.visibleTo),
@@ -1575,6 +1585,32 @@ const getVisibleSessions = (sessions: TestSession[], login: string) =>
       session.createdBy === login ||
       session.visibleTo.includes(login),
   )
+const groupCandidateSessions = (sessions: TestSession[]): CandidateGroup[] => {
+  const groups = new Map<string, CandidateGroup>()
+  sessions.forEach((session) => {
+    const id = session.candidateId ?? session.id
+    const current = groups.get(id)
+    if (current) {
+      current.sessions.push(session)
+      current.visibleTo = [...new Set([...current.visibleTo, ...(session.visibleTo ?? [])])]
+      if (session.createdAt < current.createdAt) current.createdAt = session.createdAt
+      return
+    }
+    groups.set(id, {
+      id,
+      candidate: session.candidate,
+      createdAt: session.createdAt,
+      createdBy: session.createdBy ?? '',
+      visibleTo: session.visibleTo ?? [],
+      sessions: [session],
+    })
+  })
+  return [...groups.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+}
+const getSessionByType = (group: CandidateGroup, type: AssessmentType) =>
+  group.sessions.find((session) => (session.assessmentType ?? 'marketer') === type)
+const canShowResults = (session?: TestSession) =>
+  Boolean(session && (session.status === 'completed' || session.status === 'terminated'))
 const normalizeUsers = (users: unknown) =>
   toList<UserAccount>(users).map((user, index) => ({
     ...user,
@@ -1799,46 +1835,103 @@ function HrApp() {
   const [sessions, saveSessions] = useStoredSessions()
   const [users, saveStoredUsers, usersReady] = useStoredUsers()
   const [activeLogin, setActiveLogin] = useState(getActiveUser())
-  const [authMode, setAuthMode] = useState<'start' | 'login' | 'register'>('start')
+  const [showAccountMenu, setShowAccountMenu] = useState(false)
+  const [activeOverlay, setActiveOverlay] = useState<'accounts' | 'questions' | null>(null)
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
   const activeUser = users.find((user) => user.login === activeLogin)
   const isOwner = activeUser?.role === 'owner'
   const visibleSessions = useMemo(
     () => (activeLogin ? getVisibleSessions(sessions, activeLogin) : []),
     [activeLogin, sessions],
   )
-  const [selectedId, setSelectedId] = useState<string | null>(visibleSessions[0]?.id ?? null)
-  const selected = visibleSessions.find((session) => session.id === selectedId) ?? visibleSessions[0]
+  const candidateGroups = useMemo(() => groupCandidateSessions(visibleSessions), [visibleSessions])
 
   useEffect(() => {
-    if (!selectedId && visibleSessions[0]) {
-      window.setTimeout(() => setSelectedId(visibleSessions[0].id), 0)
-    }
-    if (selectedId && !visibleSessions.some((session) => session.id === selectedId)) {
-      window.setTimeout(() => setSelectedId(visibleSessions[0]?.id ?? null), 0)
-    }
-  }, [selectedId, visibleSessions])
+    if (!usersReady || !activeLogin || !users.length) return
+    if (users.some((user) => user.login === activeLogin)) return
+    localStorage.removeItem(STORAGE_ACTIVE_USER)
+    window.setTimeout(() => setActiveLogin(null), 0)
+  }, [activeLogin, users, usersReady])
 
-  const createSession = (
-    candidate: Candidate,
-    maxSeconds: number,
-    assessmentType: AssessmentType,
-    visibleTo: string[],
-  ) => {
-    if (!activeLogin) return
-    const session: TestSession = {
-      id: createId(),
-      candidate,
-      assessmentType,
-      createdBy: activeLogin,
-      visibleTo: [...new Set([activeLogin, ...visibleTo])],
-      createdAt: new Date().toISOString(),
-      maxSeconds,
-      status: 'new',
-      currentIndex: 0,
-      answers: [],
+  useEffect(() => {
+    if (!selectedCandidateId && candidateGroups[0]) {
+      window.setTimeout(() => setSelectedCandidateId(candidateGroups[0].id), 0)
     }
+    if (selectedCandidateId && !candidateGroups.some((group) => group.id === selectedCandidateId)) {
+      window.setTimeout(() => setSelectedCandidateId(candidateGroups[0]?.id ?? null), 0)
+    }
+  }, [candidateGroups, selectedCandidateId])
+
+  const createSessionDraft = (
+    candidateId: string,
+    candidate: Candidate,
+    assessmentType: AssessmentType,
+    maxSeconds: number,
+    createdBy: string,
+    visibleTo: string[],
+  ): TestSession => ({
+    id: createId(),
+    candidateId,
+    candidate,
+    assessmentType,
+    createdBy,
+    visibleTo: [...new Set([createdBy, ...visibleTo])],
+    createdAt: new Date().toISOString(),
+    maxSeconds,
+    status: 'new',
+    currentIndex: 0,
+    answers: [],
+  })
+
+  const createCandidate = (candidate: Candidate, visibleTo: string[]) => {
+    if (!activeLogin) return
+    const candidateId = createId()
+    const session = createSessionDraft(candidateId, candidate, 'marketer', 45, activeLogin, visibleTo)
     saveSessions([session, ...sessions])
-    setSelectedId(session.id)
+    setSelectedCandidateId(candidateId)
+  }
+
+  const updateCandidate = (candidateId: string, candidate: Candidate, visibleTo: string[]) => {
+    saveSessions(
+      sessions.map((session) =>
+        (session.candidateId ?? session.id) === candidateId
+          ? {
+              ...session,
+              candidate,
+              visibleTo: [...new Set([session.createdBy, ...visibleTo])],
+            }
+          : session,
+      ),
+    )
+  }
+
+  const ensureSession = (
+    group: CandidateGroup,
+    assessmentType: AssessmentType,
+    maxSeconds: number,
+  ) => {
+    const existing = getSessionByType(group, assessmentType)
+    if (existing) {
+      if (existing.status === 'new' && existing.maxSeconds !== maxSeconds) {
+        saveSessions(
+          sessions.map((session) =>
+            session.id === existing.id ? { ...session, maxSeconds } : session,
+          ),
+        )
+      }
+      return existing.id
+    }
+    const createdBy = activeLogin ?? group.createdBy
+    const session = createSessionDraft(
+      group.id,
+      group.candidate,
+      assessmentType,
+      Math.max(10, Math.min(180, maxSeconds)),
+      createdBy,
+      group.visibleTo,
+    )
+    saveSessions([session, ...sessions])
+    return session.id
   }
 
   const finishSession = (id: string) => {
@@ -1858,7 +1951,8 @@ function HrApp() {
   const logout = () => {
     localStorage.removeItem(STORAGE_ACTIVE_USER)
     setActiveLogin(null)
-    setAuthMode('start')
+    setShowAccountMenu(false)
+    setActiveOverlay(null)
   }
 
   const saveUsers = (nextUsers: UserAccount[]) => {
@@ -1886,6 +1980,7 @@ function HrApp() {
   }
 
   if (!activeLogin) {
+    const authMode = users.length ? 'login' : 'register'
     return (
       <main className="auth-shell">
         <section className="auth-panel">
@@ -1896,25 +1991,11 @@ function HrApp() {
           <p>Сервис для HR: ссылки, QR-коды, таймер, мониторинг прохождения и итоговая оценка.</p>
           {!usersReady ? (
             <div className="loading-box">Загружаем аккаунты...</div>
-          ) : authMode === 'start' ? (
-            <div className="auth-actions">
-              {!users.length && (
-                <button className="primary" type="button" onClick={() => setAuthMode('register')}>
-                  <UserPlus size={18} />
-                  Создать первый аккаунт
-                </button>
-              )}
-              <button className="secondary" type="button" onClick={() => setAuthMode('login')}>
-                <LogIn size={18} />
-                Войти
-              </button>
-            </div>
           ) : (
             <AuthForm
               mode={authMode}
               users={users}
               onRegister={saveStoredUsers}
-              onBack={() => setAuthMode('start')}
               onSuccess={(login) => {
                 localStorage.setItem(STORAGE_ACTIVE_USER, login)
                 setActiveLogin(login)
@@ -1933,44 +2014,76 @@ function HrApp() {
           <span className="eyebrow">HR-кабинет</span>
           <h1>Оценка компетенций</h1>
         </div>
-        <div className="account-switcher">
-          <span>{activeLogin}</span>
-          <button className="secondary compact" type="button" onClick={logout}>
-            <LogOut size={18} />
-            Сменить аккаунт
+        <div className="account-menu">
+          <button
+            className="account-trigger"
+            type="button"
+            onClick={() => setShowAccountMenu((value) => !value)}
+          >
+            <span>{activeLogin}</span>
+            <ChevronDown size={18} />
           </button>
+          {showAccountMenu && (
+            <div className="account-dropdown">
+              <button type="button" onClick={logout}>
+                <LogOut size={17} />
+                Сменить аккаунт
+              </button>
+              {isOwner && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveOverlay('accounts')
+                    setShowAccountMenu(false)
+                  }}
+                >
+                  <UserPlus size={17} />
+                  Управление аккаунтами
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveOverlay('questions')
+                  setShowAccountMenu(false)
+                }}
+              >
+                <Square size={17} />
+                Банк вопросов
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
-      <section className="dashboard-grid">
-        <CreateSessionForm
-          users={users}
-          activeLogin={activeLogin}
-          onCreate={createSession}
-        />
-        <SessionList sessions={visibleSessions} selectedId={selected?.id} onSelect={setSelectedId} />
-      </section>
+      <CandidateWorkspace
+        users={users}
+        activeLogin={activeLogin}
+        groups={candidateGroups}
+        selectedCandidateId={selectedCandidateId}
+        onSelect={setSelectedCandidateId}
+        onCreate={createCandidate}
+        onUpdate={updateCandidate}
+        onEnsureSession={ensureSession}
+        onFinish={finishSession}
+      />
 
-      {isOwner && (
-        <AccountManagement
-          users={users}
-          activeLogin={activeLogin}
-          onCreate={createUser}
-          onDelete={deleteUser}
-        />
+      {activeOverlay === 'accounts' && isOwner && (
+        <ModalPanel title="Управление аккаунтами" onClose={() => setActiveOverlay(null)}>
+          <AccountManagement
+            users={users}
+            activeLogin={activeLogin}
+            onCreate={createUser}
+            onDelete={deleteUser}
+          />
+        </ModalPanel>
       )}
 
-      {selected ? (
-        <SessionDetails session={selected} onFinish={finishSession} />
-      ) : (
-        <section className="empty-state">
-          <QrCode size={32} />
-          <h2>Создайте первую ссылку</h2>
-          <p>После создания анкеты здесь появятся QR-код, статус и ответы кандидата.</p>
-        </section>
+      {activeOverlay === 'questions' && (
+        <ModalPanel title="Банк вопросов" onClose={() => setActiveOverlay(null)}>
+          <QuestionCatalog compact />
+        </ModalPanel>
       )}
-
-      <QuestionCatalog />
     </main>
   )
 }
@@ -1979,13 +2092,11 @@ function AuthForm({
   mode,
   users,
   onRegister,
-  onBack,
   onSuccess,
 }: {
   mode: 'login' | 'register'
   users: UserAccount[]
   onRegister: (users: UserAccount[]) => void
-  onBack: () => void
   onSuccess: (login: string) => void
 }) {
   const [login, setLogin] = useState('')
@@ -2055,12 +2166,473 @@ function AuthForm({
       )}
       {error && <p className="error-text">{error}</p>}
       <button className="primary" type="submit">
-        {mode === 'register' ? 'Создать аккаунт' : 'Войти'}
-      </button>
-      <button className="ghost" type="button" onClick={onBack}>
-        Назад
+        {mode === 'register' ? 'Создать первый аккаунт' : 'Войти'}
       </button>
     </form>
+  )
+}
+
+function ModalPanel({
+  title,
+  children,
+  onClose,
+}: {
+  title: string
+  children: React.ReactNode
+  onClose: () => void
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel" aria-label={title}>
+        <div className="modal-title">
+          <h2>{title}</h2>
+          <button className="ghost compact" type="button" onClick={onClose}>
+            Закрыть
+          </button>
+        </div>
+        {children}
+      </section>
+    </div>
+  )
+}
+
+function CandidateWorkspace({
+  users,
+  activeLogin,
+  groups,
+  selectedCandidateId,
+  onSelect,
+  onCreate,
+  onUpdate,
+  onEnsureSession,
+  onFinish,
+}: {
+  users: UserAccount[]
+  activeLogin: string | null
+  groups: CandidateGroup[]
+  selectedCandidateId: string | null
+  onSelect: (id: string | null) => void
+  onCreate: (candidate: Candidate, visibleTo: string[]) => void
+  onUpdate: (candidateId: string, candidate: Candidate, visibleTo: string[]) => void
+  onEnsureSession: (
+    group: CandidateGroup,
+    assessmentType: AssessmentType,
+    maxSeconds: number,
+  ) => string | undefined
+  onFinish: (id: string) => void
+}) {
+  const [draftOpen, setDraftOpen] = useState(false)
+  const selected = groups.find((group) => group.id === selectedCandidateId)
+
+  const create = (candidate: Candidate, visibleTo: string[]) => {
+    onCreate(candidate, visibleTo)
+    setDraftOpen(false)
+  }
+
+  return (
+    <section className="candidate-workspace">
+      <div className="candidate-list-head">
+        <h2>Соискатели</h2>
+        <button className="primary compact" type="button" onClick={() => setDraftOpen(true)}>
+          <Plus size={18} />
+          Новый соискатель
+        </button>
+      </div>
+
+      {draftOpen && (
+        <CandidateCard
+          mode="new"
+          users={users}
+          activeLogin={activeLogin}
+          onCreate={create}
+          onCancel={() => setDraftOpen(false)}
+        />
+      )}
+
+      <div className="candidate-list">
+        {groups.map((group) => (
+          <CandidateCard
+            key={group.id}
+            mode="existing"
+            group={group}
+            users={users}
+            activeLogin={activeLogin}
+            expanded={group.id === selected?.id}
+            onToggle={() => onSelect(group.id === selected?.id ? null : group.id)}
+            onUpdate={onUpdate}
+            onEnsureSession={onEnsureSession}
+            onFinish={onFinish}
+          />
+        ))}
+        {!groups.length && !draftOpen && (
+          <section className="empty-state">
+            <QrCode size={32} />
+            <h2>Добавьте первого соискателя</h2>
+            <p>Карточка соискателя будет хранить данные человека и отдельные опросы по позициям.</p>
+          </section>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function CandidateCard({
+  mode,
+  group,
+  users,
+  activeLogin,
+  expanded = true,
+  onToggle,
+  onCreate,
+  onUpdate,
+  onEnsureSession,
+  onFinish,
+  onCancel,
+}: {
+  mode: 'new' | 'existing'
+  group?: CandidateGroup
+  users: UserAccount[]
+  activeLogin: string | null
+  expanded?: boolean
+  onToggle?: () => void
+  onCreate?: (candidate: Candidate, visibleTo: string[]) => void
+  onUpdate?: (candidateId: string, candidate: Candidate, visibleTo: string[]) => void
+  onEnsureSession?: (
+    group: CandidateGroup,
+    assessmentType: AssessmentType,
+    maxSeconds: number,
+  ) => string | undefined
+  onFinish?: (id: string) => void
+  onCancel?: () => void
+}) {
+  const [activeTab, setActiveTab] = useState<'candidate' | AssessmentType>('candidate')
+  const [candidate, setCandidate] = useState<Candidate>(
+    group?.candidate ?? { fullName: '', role: '', contact: '', note: '' },
+  )
+  const [visibleTo, setVisibleTo] = useState<string[]>(
+    group?.visibleTo?.length ? group.visibleTo : activeLogin ? [activeLogin] : [],
+  )
+  const [error, setError] = useState('')
+
+  const update = (field: keyof Candidate, value: string) =>
+    setCandidate((current) => ({ ...current, [field]: value }))
+
+  const toggleVisibility = (login: string) => {
+    if (login === activeLogin) return
+    setVisibleTo((current) =>
+      current.includes(login)
+        ? current.filter((item) => item !== login)
+        : [...current, login],
+    )
+  }
+
+  const saveCandidate = () => {
+    if (!candidate.fullName.trim()) {
+      setError('Укажите ФИО соискателя.')
+      return
+    }
+    const cleanCandidate = {
+      fullName: candidate.fullName.trim(),
+      role: candidate.role.trim(),
+      contact: candidate.contact.trim(),
+      note: candidate.note.trim(),
+    }
+    if (mode === 'new') {
+      onCreate?.(cleanCandidate, visibleTo)
+    } else if (group) {
+      onUpdate?.(group.id, cleanCandidate, visibleTo)
+      setError('')
+    }
+  }
+
+  const statusSummary = group
+    ? ASSESSMENT_TYPES.map((type) => getSessionByType(group, type))
+        .filter(Boolean)
+        .map((session) => statusLabel(session!.status))
+        .join(', ') || 'Опросы еще не создавались'
+    : 'Заполните данные и выберите опрос'
+
+  return (
+    <article className={`candidate-card ${expanded ? 'expanded' : ''}`}>
+      {mode === 'existing' && group && (
+        <button className="candidate-card-head" type="button" onClick={onToggle}>
+          <span>
+            <strong>{group.candidate.fullName}</strong>
+            <em>{group.candidate.role || 'Позиция не указана'}</em>
+          </span>
+          <small>{statusSummary}</small>
+        </button>
+      )}
+
+      {(expanded || mode === 'new') && (
+        <div className="candidate-card-body">
+          {mode === 'new' && (
+            <div className="section-title">
+              <Plus size={20} />
+              <h2>Новый соискатель</h2>
+            </div>
+          )}
+          <div className="candidate-tabs">
+            <button
+              className={activeTab === 'candidate' ? 'active' : ''}
+              type="button"
+              onClick={() => setActiveTab('candidate')}
+            >
+              Соискатель
+            </button>
+            {ASSESSMENT_TYPES.map((type) => {
+              const session = group ? getSessionByType(group, type) : undefined
+              const done = canShowResults(session)
+              return (
+                <button
+                  className={`${activeTab === type ? 'active' : ''} ${done ? 'done' : 'pending'}`}
+                  key={type}
+                  type="button"
+                  onClick={() => setActiveTab(type)}
+                >
+                  {ASSESSMENT_LABELS[type]}
+                </button>
+              )
+            })}
+          </div>
+
+          {activeTab === 'candidate' ? (
+            <CandidateEditor
+              candidate={candidate}
+              users={users}
+              activeLogin={activeLogin}
+              visibleTo={visibleTo}
+              error={error}
+              onChange={update}
+              onToggleVisibility={toggleVisibility}
+              onSave={saveCandidate}
+              onCancel={onCancel}
+              saveLabel={mode === 'new' ? 'Сохранить соискателя' : 'Сохранить изменения'}
+            />
+          ) : mode === 'new' ? (
+            <div className="test-placeholder">
+              <QrCode size={28} />
+              <h3>Сначала сохраните соискателя</h3>
+              <p>После сохранения здесь появится QR-код для выбранного опроса.</p>
+            </div>
+          ) : group ? (
+            <AssessmentTab
+              key={`${group.id}-${activeTab}-${getSessionByType(group, activeTab)?.id ?? 'new'}`}
+              group={group}
+              assessmentType={activeTab}
+              onEnsureSession={onEnsureSession}
+              onFinish={onFinish}
+            />
+          ) : null}
+        </div>
+      )}
+    </article>
+  )
+}
+
+function CandidateEditor({
+  candidate,
+  users,
+  activeLogin,
+  visibleTo,
+  error,
+  saveLabel,
+  onChange,
+  onToggleVisibility,
+  onSave,
+  onCancel,
+}: {
+  candidate: Candidate
+  users: UserAccount[]
+  activeLogin: string | null
+  visibleTo: string[]
+  error: string
+  saveLabel: string
+  onChange: (field: keyof Candidate, value: string) => void
+  onToggleVisibility: (login: string) => void
+  onSave: () => void
+  onCancel?: () => void
+}) {
+  return (
+    <div className="candidate-form">
+      <label>
+        ФИО
+        <input
+          placeholder="Например, Анна Петрова"
+          value={candidate.fullName}
+          onChange={(event) => onChange('fullName', event.target.value)}
+        />
+      </label>
+      <label>
+        Комментарий по позиции
+        <input
+          placeholder="Например, junior-аналитик или performance-специалист"
+          value={candidate.role}
+          onChange={(event) => onChange('role', event.target.value)}
+        />
+      </label>
+      <label>
+        Контакт
+        <input
+          placeholder="Телефон, почта или мессенджер"
+          value={candidate.contact}
+          onChange={(event) => onChange('contact', event.target.value)}
+        />
+      </label>
+      <label>
+        Заметка HR
+        <textarea
+          rows={3}
+          placeholder="Опыт, источник кандидата, комментарий"
+          value={candidate.note}
+          onChange={(event) => onChange('note', event.target.value)}
+        />
+      </label>
+      <div className="visibility-box">
+        <span>Кому виден соискатель</span>
+        <div className="checkbox-list">
+          {users.map((user) => (
+            <label className="check-row" key={user.login}>
+              <input
+                type="checkbox"
+                checked={visibleTo.includes(user.login) || user.login === activeLogin}
+                disabled={user.login === activeLogin}
+                onChange={() => onToggleVisibility(user.login)}
+              />
+              {user.login}
+            </label>
+          ))}
+        </div>
+      </div>
+      {error && <p className="error-text">{error}</p>}
+      <div className="form-actions">
+        <button className="primary" type="button" onClick={onSave}>
+          {saveLabel}
+        </button>
+        {onCancel && (
+          <button className="ghost" type="button" onClick={onCancel}>
+            Отмена
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function AssessmentTab({
+  group,
+  assessmentType,
+  onEnsureSession,
+  onFinish,
+}: {
+  group: CandidateGroup
+  assessmentType: AssessmentType
+  onEnsureSession?: (
+    group: CandidateGroup,
+    assessmentType: AssessmentType,
+    maxSeconds: number,
+  ) => string | undefined
+  onFinish?: (id: string) => void
+}) {
+  const session = getSessionByType(group, assessmentType)
+  const [maxSeconds, setMaxSeconds] = useState(session?.maxSeconds ?? 45)
+  const [qr, setQr] = useState('')
+  const testUrl = session
+    ? `${window.location.origin}${window.location.pathname}#/test/${session.id}`
+    : ''
+
+  useEffect(() => {
+    if (!testUrl) return
+    QRCode.toDataURL(testUrl, { margin: 1, width: 220 }).then(setQr)
+  }, [testUrl])
+
+  const startOrUpdate = () => {
+    onEnsureSession?.(group, assessmentType, Math.max(10, Math.min(180, maxSeconds)))
+  }
+
+  if (canShowResults(session)) {
+    const questions = getQuestionBank(session!.assessmentType)
+    return (
+      <div className="assessment-result">
+        <ResultsPanel result={calculateResults(session!)} title="Итоговая оценка HR" />
+        <div className="answer-log full">
+          {session!.answers.map((answer, index) => {
+            const question = getQuestion(answer.questionId, session!.assessmentType)
+            return (
+              <article className="answer-item" key={`${answer.questionId}-${index}`}>
+                <div>
+                  <strong>{question?.text}</strong>
+                  <p>{question?.answers[answer.selectedIndex]}</p>
+                </div>
+                <span className={answer.isCorrect ? 'pill ok' : 'pill bad'}>
+                  {answer.isCorrect ? 'Верно' : 'Неверно'}
+                </span>
+              </article>
+            )
+          })}
+          {!session!.answers.length && (
+            <p className="muted">Тест был завершен без ответов: {questions.length} вопросов.</p>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="assessment-start">
+      <div className="section-title">
+        <QrCode size={20} />
+        <h2>Пройти тест</h2>
+      </div>
+      <label>
+        Время на вопрос, секунд
+        <input
+          type="number"
+          min={10}
+          max={180}
+          value={maxSeconds}
+          onChange={(event) => setMaxSeconds(Number(event.target.value))}
+        />
+      </label>
+      <button className="primary" type="button" onClick={startOrUpdate}>
+        <QrCode size={18} />
+        {session ? 'Обновить время' : 'Сформировать QR'}
+      </button>
+      {session && (
+        <>
+          {qr && <img className="qr" src={qr} alt="QR-код для прохождения теста" />}
+          <div className="copy-row">
+            <input readOnly value={testUrl} />
+            <button
+              className="icon-button"
+              type="button"
+              title="Скопировать"
+              onClick={() => navigator.clipboard?.writeText(testUrl)}
+            >
+              <ClipboardCopy size={19} />
+            </button>
+          </div>
+          <dl className="meta-grid">
+            <div>
+              <dt>Статус</dt>
+              <dd>{statusLabel(session.status)}</dd>
+            </div>
+            <div>
+              <dt>Ответы</dt>
+              <dd>
+                {session.answers.length}/{getQuestionBank(session.assessmentType).length}
+              </dd>
+            </div>
+          </dl>
+          {(session.status === 'new' || session.status === 'in_progress') && (
+            <button className="danger" type="button" onClick={() => onFinish?.(session.id)}>
+              <StopCircle size={18} />
+              Завершить тестирование
+            </button>
+          )}
+        </>
+      )}
+    </div>
   )
 }
 
@@ -2140,313 +2712,17 @@ function AccountManagement({
   )
 }
 
-function CreateSessionForm({
-  onCreate,
-  users,
-  activeLogin,
-}: {
-  users: UserAccount[]
-  activeLogin: string | null
-  onCreate: (
-    candidate: Candidate,
-    maxSeconds: number,
-    assessmentType: AssessmentType,
-    visibleTo: string[],
-  ) => void
-}) {
-  const [candidate, setCandidate] = useState<Candidate>({
-    fullName: '',
-    role: '',
-    contact: '',
-    note: '',
-  })
-  const [assessmentType, setAssessmentType] = useState<AssessmentType>('marketer')
-  const [visibleTo, setVisibleTo] = useState<string[]>(() => (activeLogin ? [activeLogin] : []))
-  const [maxSeconds, setMaxSeconds] = useState(45)
-  const [error, setError] = useState('')
-
-  const update = (field: keyof Candidate, value: string) =>
-    setCandidate((current) => ({ ...current, [field]: value }))
-
-  const submit = (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!candidate.fullName.trim()) {
-      setError('Укажите ФИО соискателя.')
-      return
-    }
-    onCreate(
-      {
-        fullName: candidate.fullName.trim(),
-        role: candidate.role.trim(),
-        contact: candidate.contact.trim(),
-        note: candidate.note.trim(),
-      },
-      Math.max(10, Math.min(180, maxSeconds)),
-      assessmentType,
-      visibleTo,
-    )
-    setCandidate({ fullName: '', role: '', contact: '', note: '' })
-    setAssessmentType('marketer')
-    setVisibleTo(activeLogin ? [activeLogin] : [])
-    setMaxSeconds(45)
-    setError('')
-  }
-
-  const toggleVisibility = (login: string) => {
-    if (login === activeLogin) return
-    setVisibleTo((current) =>
-      current.includes(login)
-        ? current.filter((item) => item !== login)
-        : [...current, login],
-    )
-  }
-
-  return (
-    <section className="panel">
-      <div className="section-title">
-        <Plus size={20} />
-        <h2>Новый соискатель</h2>
-      </div>
-      <form className="stack-form" onSubmit={submit}>
-        <label>
-          Позиция для опроса
-          <select
-            value={assessmentType}
-            onChange={(event) => setAssessmentType(event.target.value as AssessmentType)}
-          >
-            <option value="marketer">Маркетолог</option>
-            <option value="analyst">Аналитик</option>
-            <option value="skills">Навыки</option>
-          </select>
-        </label>
-        <label>
-          ФИО
-          <input
-            placeholder="Например, Анна Петрова"
-            value={candidate.fullName}
-            onChange={(event) => update('fullName', event.target.value)}
-          />
-        </label>
-        <label>
-          Комментарий по позиции
-          <input
-            placeholder="Например, junior-аналитик или performance-специалист"
-            value={candidate.role}
-            onChange={(event) => update('role', event.target.value)}
-          />
-        </label>
-        <label>
-          Контакт
-          <input
-            placeholder="Телефон, почта или мессенджер"
-            value={candidate.contact}
-            onChange={(event) => update('contact', event.target.value)}
-          />
-        </label>
-        <label>
-          Заметка HR
-          <textarea
-            rows={3}
-            placeholder="Опыт, источник кандидата, комментарий"
-            value={candidate.note}
-            onChange={(event) => update('note', event.target.value)}
-          />
-        </label>
-        <label>
-          Время на вопрос, секунд
-          <input
-            type="number"
-            min={10}
-            max={180}
-            value={maxSeconds}
-            onChange={(event) => setMaxSeconds(Number(event.target.value))}
-          />
-        </label>
-        <div className="visibility-box">
-          <span>Кому виден соискатель</span>
-          <div className="checkbox-list">
-            {users.map((user) => (
-              <label className="check-row" key={user.login}>
-                <input
-                  type="checkbox"
-                  checked={visibleTo.includes(user.login) || user.login === activeLogin}
-                  disabled={user.login === activeLogin}
-                  onChange={() => toggleVisibility(user.login)}
-                />
-                {user.login}
-              </label>
-            ))}
-          </div>
-        </div>
-        {error && <p className="error-text">{error}</p>}
-        <button className="primary" type="submit">
-          <QrCode size={18} />
-          Сформировать ссылку
-        </button>
-      </form>
-    </section>
-  )
-}
-
-function SessionList({
-  sessions,
-  selectedId,
-  onSelect,
-}: {
-  sessions: TestSession[]
-  selectedId?: string
-  onSelect: (id: string) => void
-}) {
-  return (
-    <section className="panel">
-      <div className="section-title">
-        <Clock3 size={20} />
-        <h2>Прохождения</h2>
-      </div>
-      <div className="session-list">
-        {sessions.map((session) => (
-          <button
-            className={`session-row ${session.id === selectedId ? 'active' : ''}`}
-            key={session.id}
-            type="button"
-            onClick={() => onSelect(session.id)}
-          >
-            <span>
-              {session.candidate.fullName}
-              <em>{ASSESSMENT_LABELS[session.assessmentType ?? 'marketer']}</em>
-            </span>
-            <small>{statusLabel(session.status)}</small>
-          </button>
-        ))}
-        {!sessions.length && <p className="muted">Пока нет созданных ссылок.</p>}
-      </div>
-    </section>
-  )
-}
-
-function SessionDetails({
-  session,
-  onFinish,
-}: {
-  session: TestSession
-  onFinish: (id: string) => void
-}) {
-  const [qr, setQr] = useState('')
-  const url = useMemo(() => {
-    const base = `${window.location.origin}${window.location.pathname}`
-    return `${base}#/test/${session.id}`
-  }, [session.id])
-  const result = calculateResults(session)
-  const questions = getQuestionBank(session.assessmentType)
-  const currentQuestion = questions[session.currentIndex]
-  const canFinish = session.status === 'new' || session.status === 'in_progress'
-
-  useEffect(() => {
-    QRCode.toDataURL(url, { margin: 1, width: 220 }).then(setQr)
-  }, [url])
-
-  const copy = async () => {
-    await navigator.clipboard?.writeText(url)
-  }
-
-  return (
-    <section className="details-layout">
-      <div className="panel link-panel">
-        <div className="section-title">
-          <QrCode size={20} />
-          <h2>Ссылка кандидата</h2>
-        </div>
-        {qr && <img className="qr" src={qr} alt="QR-код для прохождения теста" />}
-        <div className="copy-row">
-          <input readOnly value={url} />
-          <button className="icon-button" type="button" title="Скопировать" onClick={copy}>
-            <ClipboardCopy size={19} />
-          </button>
-        </div>
-        <dl className="meta-grid">
-          <div>
-            <dt>Опрос</dt>
-            <dd>{ASSESSMENT_LABELS[session.assessmentType ?? 'marketer']}</dd>
-          </div>
-          <div>
-            <dt>Создал</dt>
-            <dd>{session.createdBy ?? 'Не указано'}</dd>
-          </div>
-          <div>
-            <dt>ФИО</dt>
-            <dd>{session.candidate.fullName}</dd>
-          </div>
-          <div>
-            <dt>Статус</dt>
-            <dd>{statusLabel(session.status)}</dd>
-          </div>
-          <div>
-            <dt>Таймер</dt>
-            <dd>{session.maxSeconds} сек.</dd>
-          </div>
-          <div>
-            <dt>Ответы</dt>
-            <dd>
-              {session.answers.length}/{questions.length}
-            </dd>
-          </div>
-        </dl>
-        {canFinish && (
-          <button className="danger" type="button" onClick={() => onFinish(session.id)}>
-            <StopCircle size={18} />
-            Завершить тестирование
-          </button>
-        )}
-      </div>
-
-      <div className="panel monitor-panel">
-        <div className="section-title">
-          <BarChart3 size={20} />
-          <h2>Мониторинг</h2>
-        </div>
-        <div className="current-question">
-          <span className="eyebrow">Текущий вопрос</span>
-          <strong>
-            {session.status === 'completed' || session.status === 'terminated'
-              ? 'Тестирование завершено'
-              : currentQuestion?.text ?? 'Кандидат еще не начал'}
-          </strong>
-        </div>
-        <div className="answer-log">
-          {session.answers.map((answer, index) => {
-            const question = getQuestion(answer.questionId, session.assessmentType)
-            return (
-              <article className="answer-item" key={`${answer.questionId}-${index}`}>
-                <div>
-                  <strong>{question?.text}</strong>
-                  <p>{question?.answers[answer.selectedIndex]}</p>
-                </div>
-                <span className={answer.isCorrect ? 'pill ok' : 'pill bad'}>
-                  {answer.isCorrect ? 'Верно' : 'Неверно'}
-                </span>
-              </article>
-            )
-          })}
-          {!session.answers.length && <p className="muted">Ответы появятся здесь в реальном времени.</p>}
-        </div>
-      </div>
-
-      {(session.status === 'completed' || session.status === 'terminated') && (
-        <ResultsPanel result={result} title="Итоговая оценка HR" />
-      )}
-    </section>
-  )
-}
-
-function QuestionCatalog() {
+function QuestionCatalog({ compact = false }: { compact?: boolean }) {
   const [type, setType] = useState<AssessmentType>('marketer')
   const questions = getQuestionBank(type)
   return (
-    <section className="panel catalog-panel">
-      <div className="section-title">
-        <Square size={19} />
-        <h2>Банк вопросов</h2>
-      </div>
+    <section className={compact ? 'catalog-panel compact-catalog' : 'panel catalog-panel'}>
+      {!compact && (
+        <div className="section-title">
+          <Square size={19} />
+          <h2>Банк вопросов</h2>
+        </div>
+      )}
       <div className="segmented">
         {(Object.keys(ASSESSMENT_LABELS) as AssessmentType[]).map((item) => (
           <button
@@ -2491,7 +2767,7 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
   const [sessions, saveSessions] = useStoredSessions()
   const session = sessions.find((item) => item.id === sessionId)
   const [secondsLeft, setSecondsLeft] = useState(session?.maxSeconds ?? 45)
-  const [questionStartedAt, setQuestionStartedAt] = useState(Date.now())
+  const [questionStartedAt, setQuestionStartedAt] = useState(0)
   const [savedFlash, setSavedFlash] = useState(false)
 
   const questions = session ? getQuestionBank(session.assessmentType) : []
@@ -2499,40 +2775,8 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
   const finished = session?.status === 'completed'
   const terminated = session?.status === 'terminated'
 
-  useEffect(() => {
-    if (!session || session.status !== 'in_progress') return
-    const resetTimer = window.setTimeout(() => {
-      setSecondsLeft(session.maxSeconds)
-      setQuestionStartedAt(Date.now())
-    }, 0)
-    return () => window.clearTimeout(resetTimer)
-  }, [session])
-
-  useEffect(() => {
-    if (!session || session.status !== 'in_progress' || !currentQuestion) return
-    const timer = window.setInterval(() => {
-      setSecondsLeft((value) => {
-        if (value <= 1) {
-          window.clearInterval(timer)
-          submitAnswer(currentQuestion.answers.length - 1)
-          return 0
-        }
-        return value - 1
-      })
-    }, 1000)
-    return () => window.clearInterval(timer)
-  })
-
-  if (!session) {
-    return (
-      <main className="candidate-shell centered">
-        <h1>Ссылка не найдена</h1>
-        <p>Попросите HR сформировать новую ссылку для прохождения.</p>
-      </main>
-    )
-  }
-
   const updateSession = (updater: (session: TestSession) => TestSession) => {
+    if (!session) return
     saveSessions(sessions.map((item) => (item.id === session.id ? updater(item) : item)))
   }
 
@@ -2545,9 +2789,10 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
     }))
   }
 
-  function submitAnswer(selectedIndex: number) {
+  const submitAnswer = (selectedIndex: number) => {
     if (!session || !currentQuestion || session.status !== 'in_progress') return
-    const spentSeconds = Math.max(1, Math.round((Date.now() - questionStartedAt) / 1000))
+    const startedAt = questionStartedAt || Date.now()
+    const spentSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000))
     const isCorrect = selectedIndex === currentQuestion.correctIndex
     const nextIndex = session.currentIndex + 1
     updateSession((current) => ({
@@ -2568,6 +2813,43 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
     }))
     setSavedFlash(true)
     window.setTimeout(() => setSavedFlash(false), 450)
+  }
+
+  useEffect(() => {
+    if (!session || session.status !== 'in_progress') return
+    const resetTimer = window.setTimeout(() => {
+      setSecondsLeft(session.maxSeconds)
+      setQuestionStartedAt(Date.now())
+    }, 0)
+    return () => window.clearTimeout(resetTimer)
+  // Таймер должен сбрасываться только при смене вопроса или параметров сессии.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.currentIndex, session?.id, session?.maxSeconds, session?.status])
+
+  useEffect(() => {
+    if (!session || session.status !== 'in_progress' || !currentQuestion) return
+    const timer = window.setInterval(() => {
+      setSecondsLeft((value) => {
+        if (value <= 1) {
+          window.clearInterval(timer)
+          submitAnswer(currentQuestion.answers.length - 1)
+          return 0
+        }
+        return value - 1
+      })
+    }, 1000)
+    return () => window.clearInterval(timer)
+  // Интервал не зависит от каждого render-функции submitAnswer, иначе счетчик будет пересоздаваться каждую секунду.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentQuestion, questionStartedAt, questions.length, session, sessions])
+
+  if (!session) {
+    return (
+      <main className="candidate-shell centered">
+        <h1>Ссылка не найдена</h1>
+        <p>Попросите HR сформировать новую ссылку для прохождения.</p>
+      </main>
+    )
   }
 
   if (terminated) {
