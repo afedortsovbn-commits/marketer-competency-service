@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import {
   ChevronDown,
@@ -22,27 +22,11 @@ import {
   subscribeRemoteState,
 } from './realtime'
 
-type AssessmentType = 'marketer' | 'analyst' | 'skills'
+type AssessmentType = string
 
 type Direction = string
 
-type Competency =
-  | 'Стратегия'
-  | 'Аналитика'
-  | 'Performance'
-  | 'Бренд'
-  | 'Контент'
-  | 'CRM'
-  | 'Продуктовый маркетинг'
-  | 'Исследования'
-  | 'SEO'
-  | 'SMM'
-  | 'Маркетинговые операции'
-  | 'Софтскилы'
-  | 'IQ и логика'
-  | 'Глубина мышления'
-  | 'Внимательность'
-  | 'Глубина проработки'
+type Competency = string
 
 type Question = {
   id: string
@@ -52,6 +36,13 @@ type Question = {
   competency: Competency
   direction: Direction | 'soft'
   level: 'junior' | 'middle' | 'senior' | 'lead'
+  weight?: number
+}
+
+type QuestionSection = {
+  id: AssessmentType
+  label: string
+  questions: Question[]
 }
 
 type Candidate = {
@@ -1473,12 +1464,18 @@ const QUESTION_BANKS: Record<AssessmentType, Question[]> = {
   skills: SKILLS_QUESTIONS,
 }
 
-const ASSESSMENT_LABELS: Record<AssessmentType, string> = {
+const DEFAULT_ASSESSMENT_LABELS: Record<AssessmentType, string> = {
   marketer: 'Маркетолог',
   analyst: 'Аналитик',
   skills: 'Навыки',
 }
-const ASSESSMENT_TYPES = Object.keys(ASSESSMENT_LABELS) as AssessmentType[]
+const DEFAULT_QUESTION_SECTIONS: QuestionSection[] = Object.entries(QUESTION_BANKS).map(
+  ([id, questions]) => ({
+    id,
+    label: DEFAULT_ASSESSMENT_LABELS[id] ?? id,
+    questions,
+  }),
+)
 
 const DIRECTION_LABELS: Record<AssessmentType, Record<string, string>> = {
   marketer: {
@@ -1522,6 +1519,7 @@ const DIRECTION_LABELS: Record<AssessmentType, Record<string, string>> = {
 const STORAGE_SESSIONS = 'marketer-assessment:sessions'
 const STORAGE_USERS = 'marketer-assessment:users'
 const STORAGE_ACTIVE_USER = 'marketer-assessment:active-user'
+const STORAGE_QUESTION_SECTIONS = 'marketer-assessment:question-sections'
 
 const createId = () =>
   `mk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -1559,16 +1557,52 @@ const getRoute = () => {
   return { name: name || 'hr', id }
 }
 
-const getQuestionBank = (type?: AssessmentType) => QUESTION_BANKS[type ?? 'marketer']
-const getQuestion = (id: string, type?: AssessmentType) =>
-  getQuestionBank(type).find((question) => question.id === id)
-const getScoredQuestions = (type?: AssessmentType) =>
-  getQuestionBank(type).filter((question) => !question.id.endsWith('demo') && question.id !== 'demo')
 const toList = <T,>(value: unknown): T[] => {
   if (Array.isArray(value)) return value.filter(Boolean) as T[]
   if (value && typeof value === 'object') return Object.values(value).filter(Boolean) as T[]
   return []
 }
+const normalizeQuestion = (question: Partial<Question>, index: number): Question => {
+  const rawAnswers = question.answers?.length ? question.answers : ['Вариант 1', 'Вариант 2', 'Не знаю']
+  const answers = rawAnswers.includes('Не знаю') ? rawAnswers : [...rawAnswers, 'Не знаю']
+  return {
+    id: question.id || createId(),
+    text: question.text || `Вопрос ${index + 1}`,
+    answers,
+    correctIndex: Math.max(0, Math.min(question.correctIndex ?? 0, answers.length - 1)),
+    competency: question.competency || 'Общая компетенция',
+    direction: question.direction || question.competency || 'general',
+    level: question.level || 'junior',
+    weight: Number(question.weight ?? 1) > 0 ? Number(question.weight ?? 1) : 1,
+  }
+}
+const normalizeQuestionSections = (value: unknown): QuestionSection[] => {
+  const source = toList<QuestionSection>(value)
+  const sections = source.length ? source : DEFAULT_QUESTION_SECTIONS
+  return sections.map((section, index) => ({
+    id: section.id || `section-${index + 1}`,
+    label: section.label || DEFAULT_ASSESSMENT_LABELS[section.id] || section.id || `Раздел ${index + 1}`,
+    questions: toList<Question>(section.questions).map(normalizeQuestion),
+  }))
+}
+const getQuestionSections = () =>
+  normalizeQuestionSections(readJson<unknown>(STORAGE_QUESTION_SECTIONS, DEFAULT_QUESTION_SECTIONS))
+const setQuestionSections = (sections: QuestionSection[]) => {
+  const normalized = normalizeQuestionSections(sections)
+  writeJson(STORAGE_QUESTION_SECTIONS, normalized)
+  if (firebaseEnabled) void saveRemoteState('questionSections', normalized)
+}
+const getQuestionBank = (type?: AssessmentType, sections = getQuestionSections()) =>
+  sections.find((section) => section.id === (type ?? 'marketer'))?.questions ?? sections[0]?.questions ?? []
+const getQuestion = (id: string, type?: AssessmentType, sections = getQuestionSections()) =>
+  getQuestionBank(type, sections).find((question) => question.id === id)
+const getScoredQuestions = (type?: AssessmentType, sections = getQuestionSections()) =>
+  getQuestionBank(type, sections).filter((question) => !question.id.endsWith('demo') && question.id !== 'demo')
+const getAssessmentLabel = (type?: AssessmentType, sections = getQuestionSections()) =>
+  sections.find((section) => section.id === (type ?? 'marketer'))?.label ??
+  DEFAULT_ASSESSMENT_LABELS[type ?? 'marketer'] ??
+  type ??
+  'Опрос'
 const normalizeSessions = (sessions: unknown) =>
   toList<TestSession>(sessions).map((session) => ({
     ...session,
@@ -1723,15 +1757,66 @@ function useStoredUsers() {
   return [users, save, ready] as const
 }
 
-function calculateResults(session: TestSession) {
-  const scoredQuestions = getScoredQuestions(session.assessmentType)
+function useStoredQuestionSections() {
+  const [sections, setLocalSections] = useState<QuestionSection[]>(() => getQuestionSections())
+
+  useEffect(() => {
+    const sync = () => setLocalSections(getQuestionSections())
+    window.addEventListener('storage', sync)
+    window.addEventListener('assessment-storage', sync)
+    return () => {
+      window.removeEventListener('storage', sync)
+      window.removeEventListener('assessment-storage', sync)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!firebaseEnabled) return undefined
+    let stopped = false
+    void readRemoteState<unknown>('questionSections', DEFAULT_QUESTION_SECTIONS).then((remoteValue) => {
+      if (stopped) return
+      const remoteSections = normalizeQuestionSections(remoteValue)
+      setLocalSections(remoteSections)
+      writeJson(STORAGE_QUESTION_SECTIONS, remoteSections)
+    })
+    const unsubscribe = subscribeRemoteState<unknown>(
+      'questionSections',
+      DEFAULT_QUESTION_SECTIONS,
+      (remoteValue) => {
+        const normalized = normalizeQuestionSections(remoteValue)
+        setLocalSections(normalized)
+        writeJson(STORAGE_QUESTION_SECTIONS, normalized)
+      },
+    )
+    return () => {
+      stopped = true
+      unsubscribe()
+    }
+  }, [])
+
+  const save = (nextSections: QuestionSection[]) => {
+    const normalized = normalizeQuestionSections(nextSections)
+    setLocalSections(normalized)
+    setQuestionSections(normalized)
+  }
+
+  return [sections, save] as const
+}
+
+function calculateResults(session: TestSession, sections = getQuestionSections()) {
+  const scoredQuestions = getScoredQuestions(session.assessmentType, sections)
   const answerMap = new Map(session.answers.map((answer) => [answer.questionId, answer]))
   const scoredAnswers = scoredQuestions.map((question) => ({
     question,
     answer: answerMap.get(question.id),
   }))
+  const totalWeight = scoredQuestions.reduce((sum, question) => sum + (question.weight ?? 1), 0)
+  const correctWeight = scoredAnswers.reduce(
+    (sum, item) => sum + (item.answer?.isCorrect ? (item.question.weight ?? 1) : 0),
+    0,
+  )
   const correct = scoredAnswers.filter((item) => item.answer?.isCorrect).length
-  const percent = Math.round((correct / scoredQuestions.length) * 100)
+  const percent = totalWeight ? Math.round((correctWeight / totalWeight) * 100) : 0
   const seniorCorrect = scoredAnswers.filter(
     (item) => item.question.level === 'senior' && item.answer?.isCorrect,
   ).length
@@ -1759,7 +1844,7 @@ function calculateResults(session: TestSession) {
   )
 
   const directionBlocks = buildBlocks(
-    Object.keys(DIRECTION_LABELS[session.assessmentType ?? 'marketer']),
+    [...new Set(scoredQuestions.map((question) => question.direction))],
     (question) => question.direction,
     answerMap,
     DIRECTION_LABELS[session.assessmentType ?? 'marketer'],
@@ -1808,12 +1893,17 @@ function buildBlocks<T extends string>(
 ): ResultBlock[] {
   return keys.map((key) => {
     const questions = sourceQuestions.filter((question) => picker(question) === key)
+    const correctWeight = questions.reduce(
+      (sum, question) => sum + (answerMap.get(question.id)?.isCorrect ? (question.weight ?? 1) : 0),
+      0,
+    )
+    const totalWeight = questions.reduce((sum, question) => sum + (question.weight ?? 1), 0)
     const correct = questions.filter((question) => answerMap.get(question.id)?.isCorrect).length
     return {
       title: labels?.[key] ?? key,
       total: questions.length,
       correct,
-      percent: questions.length ? Math.round((correct / questions.length) * 100) : 0,
+      percent: totalWeight ? Math.round((correctWeight / totalWeight) * 100) : 0,
     }
   })
 }
@@ -1837,6 +1927,7 @@ function App() {
 function HrApp() {
   const [sessions, saveSessions] = useStoredSessions()
   const [users, saveStoredUsers, usersReady] = useStoredUsers()
+  const [questionSections, saveQuestionSections] = useStoredQuestionSections()
   const [activeLogin, setActiveLogin] = useState(getActiveUser())
   const [showAccountMenu, setShowAccountMenu] = useState(false)
   const [activeOverlay, setActiveOverlay] = useState<'accounts' | 'questions' | null>(null)
@@ -1886,7 +1977,14 @@ function HrApp() {
   const createCandidate = (candidate: Candidate, visibleTo: string[]) => {
     if (!activeLogin) return
     const candidateId = createId()
-    const session = createSessionDraft(candidateId, candidate, 'marketer', 45, activeLogin, visibleTo)
+    const session = createSessionDraft(
+      candidateId,
+      candidate,
+      questionSections[0]?.id ?? 'marketer',
+      45,
+      activeLogin,
+      visibleTo,
+    )
     saveSessions([session, ...sessions])
     setSelectedCandidateId(candidateId)
   }
@@ -2082,6 +2180,7 @@ function HrApp() {
         users={users}
         activeLogin={activeLogin}
         groups={candidateGroups}
+        questionSections={questionSections}
         selectedCandidateId={selectedCandidateId}
         onSelect={setSelectedCandidateId}
         onCreate={createCandidate}
@@ -2104,7 +2203,12 @@ function HrApp() {
 
       {activeOverlay === 'questions' && (
         <ModalPanel title="Банк вопросов" onClose={() => setActiveOverlay(null)}>
-          <QuestionCatalog compact />
+          <QuestionCatalog
+            compact
+            isOwner={isOwner}
+            sections={questionSections}
+            onSave={saveQuestionSections}
+          />
         </ModalPanel>
       )}
     </main>
@@ -2223,6 +2327,7 @@ function CandidateWorkspace({
   users,
   activeLogin,
   groups,
+  questionSections,
   selectedCandidateId,
   onSelect,
   onCreate,
@@ -2234,6 +2339,7 @@ function CandidateWorkspace({
   users: UserAccount[]
   activeLogin: string | null
   groups: CandidateGroup[]
+  questionSections: QuestionSection[]
   selectedCandidateId: string | null
   onSelect: (id: string | null) => void
   onCreate: (candidate: Candidate, visibleTo: string[]) => void
@@ -2269,6 +2375,7 @@ function CandidateWorkspace({
           mode="new"
           users={users}
           activeLogin={activeLogin}
+          questionSections={questionSections}
           onCreate={create}
           onCancel={() => setDraftOpen(false)}
         />
@@ -2280,6 +2387,7 @@ function CandidateWorkspace({
             key={group.id}
             mode="existing"
             group={group}
+            questionSections={questionSections}
             users={users}
             activeLogin={activeLogin}
             expanded={group.id === selected?.id}
@@ -2305,6 +2413,7 @@ function CandidateWorkspace({
 function CandidateCard({
   mode,
   group,
+  questionSections = DEFAULT_QUESTION_SECTIONS,
   users,
   activeLogin,
   expanded = true,
@@ -2318,6 +2427,7 @@ function CandidateCard({
 }: {
   mode: 'new' | 'existing'
   group?: CandidateGroup
+  questionSections?: QuestionSection[]
   users: UserAccount[]
   activeLogin: string | null
   expanded?: boolean
@@ -2399,7 +2509,8 @@ function CandidateCard({
             >
               Соискатель
             </button>
-            {ASSESSMENT_TYPES.map((type) => {
+            {questionSections.map((section) => {
+              const type = section.id
               const session = group ? getSessionByType(group, type) : undefined
               const done = canShowResults(session)
               return (
@@ -2409,7 +2520,7 @@ function CandidateCard({
                   type="button"
                   onClick={() => setActiveTab(type)}
                 >
-                  {ASSESSMENT_LABELS[type]}
+                  {section.label}
                 </button>
               )
             })}
@@ -2439,6 +2550,7 @@ function CandidateCard({
               key={`${group.id}-${activeTab}-${getSessionByType(group, activeTab)?.id ?? 'new'}`}
               group={group}
               assessmentType={activeTab}
+              questionSections={questionSections}
               onEnsureSession={onEnsureSession}
               onFinish={onFinish}
               onRestart={onRestart}
@@ -2542,12 +2654,14 @@ function CandidateEditor({
 function AssessmentTab({
   group,
   assessmentType,
+  questionSections,
   onEnsureSession,
   onFinish,
   onRestart,
 }: {
   group: CandidateGroup
   assessmentType: AssessmentType
+  questionSections: QuestionSection[]
   onEnsureSession?: (
     group: CandidateGroup,
     assessmentType: AssessmentType,
@@ -2577,7 +2691,7 @@ function AssessmentTab({
     onRestart?.(session.id, Math.max(10, Math.min(180, maxSeconds)))
   }
 
-  const questions = session ? getQuestionBank(session.assessmentType) : []
+  const questions = session ? getQuestionBank(session.assessmentType, questionSections) : []
   const currentQuestion = session ? questions[session.currentIndex] : undefined
   const answeredCount = session?.answers.length ?? 0
   const totalCount = questions.length
@@ -2601,10 +2715,10 @@ function AssessmentTab({
             Пройти заново
           </button>
         </div>
-        <ResultsPanel result={calculateResults(session!)} title="Итоговая оценка HR" />
+        <ResultsPanel result={calculateResults(session!, questionSections)} title="Итоговая оценка HR" />
         <div className="answer-log full">
           {session!.answers.map((answer, index) => {
-            const question = getQuestion(answer.questionId, session!.assessmentType)
+            const question = getQuestion(answer.questionId, session!.assessmentType, questionSections)
             return (
               <article className="answer-item" key={`${answer.questionId}-${index}`}>
                 <div>
@@ -2680,7 +2794,7 @@ function AssessmentTab({
             <div>
               <dt>Ответы</dt>
               <dd>
-                {session.answers.length}/{getQuestionBank(session.assessmentType).length}
+                {session.answers.length}/{getQuestionBank(session.assessmentType, questionSections).length}
               </dd>
             </div>
           </dl>
@@ -2692,7 +2806,7 @@ function AssessmentTab({
           )}
           <div className="answer-log full">
             {session.answers.map((answer, index) => {
-              const question = getQuestion(answer.questionId, session.assessmentType)
+              const question = getQuestion(answer.questionId, session.assessmentType, questionSections)
               return (
                 <article className="answer-item" key={`${answer.questionId}-${index}`}>
                   <div>
@@ -2793,9 +2907,95 @@ function AccountManagement({
   )
 }
 
-function QuestionCatalog({ compact = false }: { compact?: boolean }) {
-  const [type, setType] = useState<AssessmentType>('marketer')
-  const questions = getQuestionBank(type)
+function QuestionCatalog({
+  compact = false,
+  isOwner = false,
+  sections = getQuestionSections(),
+  onSave,
+}: {
+  compact?: boolean
+  isOwner?: boolean
+  sections?: QuestionSection[]
+  onSave?: (sections: QuestionSection[]) => void
+}) {
+  const [type, setType] = useState<AssessmentType>(sections[0]?.id ?? 'marketer')
+  const activeSection = sections.find((section) => section.id === type) ?? sections[0]
+  const questions = activeSection?.questions ?? []
+  const saveSections = (nextSections: QuestionSection[]) => onSave?.(normalizeQuestionSections(nextSections))
+  const updateSection = (sectionId: string, patch: Partial<QuestionSection>) => {
+    saveSections(
+      sections.map((section) => (section.id === sectionId ? { ...section, ...patch } : section)),
+    )
+  }
+  const addSection = () => {
+    const id = `section-${Date.now().toString(36)}`
+    saveSections([
+      ...sections,
+      {
+        id,
+        label: 'Новый раздел',
+        questions: [
+          normalizeQuestion({
+            text: 'Тестовый вопрос: выберите правильный вариант ответа.',
+            answers: ['Неправильный', 'Правильный', 'Неправильный', 'Не знаю'],
+            correctIndex: 1,
+            competency: 'Софтскилы',
+            direction: 'soft',
+          }, 0),
+        ],
+      },
+    ])
+    setType(id)
+  }
+  const deleteSection = (sectionId: string) => {
+    const nextSections = sections.filter((section) => section.id !== sectionId)
+    saveSections(nextSections)
+    setType(nextSections[0]?.id ?? 'marketer')
+  }
+  const updateQuestion = (questionId: string, patch: Partial<Question>) => {
+    if (!activeSection) return
+    updateSection(activeSection.id, {
+      questions: activeSection.questions.map((question) =>
+        question.id === questionId ? normalizeQuestion({ ...question, ...patch }, 0) : question,
+      ),
+    })
+  }
+  const addQuestion = () => {
+    if (!activeSection) return
+    updateSection(activeSection.id, {
+      questions: [
+        ...activeSection.questions,
+        normalizeQuestion({
+          text: 'Новый вопрос',
+          answers: ['Вариант 1', 'Вариант 2', 'Не знаю'],
+          correctIndex: 0,
+          competency: 'Общая компетенция',
+          direction: 'general',
+          weight: 1,
+        }, activeSection.questions.length),
+      ],
+    })
+  }
+  const deleteQuestion = (questionId: string) => {
+    if (!activeSection) return
+    updateSection(activeSection.id, {
+      questions: activeSection.questions.filter((question) => question.id !== questionId),
+    })
+  }
+  const updateAnswer = (question: Question, answerIndex: number, value: string) => {
+    const answers = question.answers.map((answer, index) => (index === answerIndex ? value : answer))
+    updateQuestion(question.id, { answers })
+  }
+  const addAnswer = (question: Question) => {
+    updateQuestion(question.id, { answers: [...question.answers, 'Новый вариант'] })
+  }
+  const deleteAnswer = (question: Question, answerIndex: number) => {
+    const answers = question.answers.filter((_, index) => index !== answerIndex)
+    updateQuestion(question.id, {
+      answers,
+      correctIndex: Math.min(question.correctIndex, Math.max(answers.length - 1, 0)),
+    })
+  }
   return (
     <section className={compact ? 'catalog-panel compact-catalog' : 'panel catalog-panel'}>
       {!compact && (
@@ -2805,21 +3005,49 @@ function QuestionCatalog({ compact = false }: { compact?: boolean }) {
         </div>
       )}
       <div className="segmented">
-        {(Object.keys(ASSESSMENT_LABELS) as AssessmentType[]).map((item) => (
+        {sections.map((section) => (
           <button
-            className={item === type ? 'active' : ''}
-            key={item}
+            className={section.id === type ? 'active' : ''}
+            key={section.id}
             type="button"
-            onClick={() => setType(item)}
+            onClick={() => setType(section.id)}
           >
-            {ASSESSMENT_LABELS[item]}
+            {section.label}
           </button>
         ))}
       </div>
+      {isOwner && activeSection && (
+        <div className="question-admin">
+          <label>
+            Название раздела
+            <input
+              value={activeSection.label}
+              onChange={(event) => updateSection(activeSection.id, { label: event.target.value })}
+            />
+          </label>
+          <div className="form-actions">
+            <button className="primary compact" type="button" onClick={addSection}>
+              <Plus size={16} />
+              Добавить раздел
+            </button>
+            {sections.length > 1 && (
+              <button className="danger compact" type="button" onClick={() => deleteSection(activeSection.id)}>
+                <Trash2 size={16} />
+                Удалить раздел
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <p className="muted">
-        {questions.length} вопросов, включая первый тестовый. Редактирование закрыто, логика
-        оценки зашита в сервисе.
+        {questions.length} вопросов. Вес вопроса влияет на итоговую оценку компетенции, по умолчанию 1.
       </p>
+      {isOwner && (
+        <button className="primary compact" type="button" onClick={addQuestion}>
+          <Plus size={16} />
+          Добавить вопрос
+        </button>
+      )}
       <div className="question-list">
         {questions.map((question, index) => (
           <details key={question.id}>
@@ -2827,16 +3055,93 @@ function QuestionCatalog({ compact = false }: { compact?: boolean }) {
               <span>{index + 1}. {question.text}</span>
               <small>{question.competency}</small>
             </summary>
-            <ol>
-              {question.answers.map((answer, answerIndex) => (
-                <li
-                  className={answerIndex === question.correctIndex ? 'correct-answer' : ''}
-                  key={`${question.id}-${answerIndex}`}
-                >
-                  {answer}
-                </li>
-              ))}
-            </ol>
+            {isOwner ? (
+              <div className="question-editor">
+                <label>
+                  Вопрос
+                  <textarea
+                    rows={2}
+                    value={question.text}
+                    onChange={(event) => updateQuestion(question.id, { text: event.target.value })}
+                  />
+                </label>
+                <div className="question-editor-grid">
+                  <label>
+                    Компетенция
+                    <input
+                      value={question.competency}
+                      onChange={(event) => updateQuestion(question.id, { competency: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Направление
+                    <input
+                      value={question.direction}
+                      onChange={(event) => updateQuestion(question.id, { direction: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Вес
+                    <input
+                      min={0.1}
+                      step={0.1}
+                      type="number"
+                      value={question.weight ?? 1}
+                      onChange={(event) => updateQuestion(question.id, { weight: Number(event.target.value) })}
+                    />
+                  </label>
+                </div>
+                <div className="answer-editor-list">
+                  {question.answers.map((answer, answerIndex) => (
+                    <div className="answer-editor-row" key={`${question.id}-${answerIndex}`}>
+                      <input
+                        aria-label={`Вариант ${answerIndex + 1}`}
+                        value={answer}
+                        onChange={(event) => updateAnswer(question, answerIndex, event.target.value)}
+                      />
+                      <label className="radio-row">
+                        <input
+                          checked={question.correctIndex === answerIndex}
+                          type="radio"
+                          onChange={() => updateQuestion(question.id, { correctIndex: answerIndex })}
+                        />
+                        Верный
+                      </label>
+                      {question.answers.length > 2 && (
+                        <button
+                          className="icon-button danger-icon"
+                          type="button"
+                          title="Удалить вариант"
+                          onClick={() => deleteAnswer(question, answerIndex)}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="form-actions">
+                  <button className="secondary compact" type="button" onClick={() => addAnswer(question)}>
+                    Добавить вариант
+                  </button>
+                  <button className="danger compact" type="button" onClick={() => deleteQuestion(question.id)}>
+                    <Trash2 size={16} />
+                    Удалить вопрос
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <ol>
+                {question.answers.map((answer, answerIndex) => (
+                  <li
+                    className={answerIndex === question.correctIndex ? 'correct-answer' : ''}
+                    key={`${question.id}-${answerIndex}`}
+                  >
+                    {answer}
+                  </li>
+                ))}
+              </ol>
+            )}
           </details>
         ))}
       </div>
@@ -2846,12 +3151,15 @@ function QuestionCatalog({ compact = false }: { compact?: boolean }) {
 
 function CandidateApp({ sessionId }: { sessionId: string }) {
   const [sessions, saveSessions] = useStoredSessions()
+  const [questionSections] = useStoredQuestionSections()
   const session = sessions.find((item) => item.id === sessionId)
   const [secondsLeft, setSecondsLeft] = useState(session?.maxSeconds ?? 45)
   const [questionStartedAt, setQuestionStartedAt] = useState(0)
   const [savedFlash, setSavedFlash] = useState(false)
+  const deadlineRef = useRef(0)
+  const timeoutSubmittedRef = useRef(false)
 
-  const questions = session ? getQuestionBank(session.assessmentType) : []
+  const questions = session ? getQuestionBank(session.assessmentType, questionSections) : []
   const currentQuestion = session ? questions[session.currentIndex] : undefined
   const finished = session?.status === 'completed'
   const terminated = session?.status === 'terminated'
@@ -2898,31 +3206,33 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
 
   useEffect(() => {
     if (!session || session.status !== 'in_progress') return
+    const startedAt = Date.now()
+    deadlineRef.current = startedAt + session.maxSeconds * 1000
+    timeoutSubmittedRef.current = false
     const resetTimer = window.setTimeout(() => {
       setSecondsLeft(session.maxSeconds)
-      setQuestionStartedAt(Date.now())
+      setQuestionStartedAt(startedAt)
     }, 0)
     return () => window.clearTimeout(resetTimer)
-  // Таймер должен сбрасываться только при смене вопроса или параметров сессии.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Таймер должен сбрасываться только при смене вопроса или параметров сессии.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.currentIndex, session?.id, session?.maxSeconds, session?.status])
 
   useEffect(() => {
     if (!session || session.status !== 'in_progress' || !currentQuestion) return
     const timer = window.setInterval(() => {
-      setSecondsLeft((value) => {
-        if (value <= 1) {
-          window.clearInterval(timer)
-          submitAnswer(-1)
-          return 0
-        }
-        return value - 1
-      })
-    }, 1000)
+      const remaining = Math.max(0, Math.ceil((deadlineRef.current - Date.now()) / 1000))
+      setSecondsLeft(remaining)
+      if (remaining <= 0 && !timeoutSubmittedRef.current) {
+        timeoutSubmittedRef.current = true
+        window.clearInterval(timer)
+        submitAnswer(-1)
+      }
+    }, 250)
     return () => window.clearInterval(timer)
-  // Интервал не зависит от каждого render-функции submitAnswer, иначе счетчик будет пересоздаваться каждую секунду.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentQuestion, questionStartedAt, questions.length, session, sessions])
+    // Интервал должен жить до смены вопроса; submitAnswer берет актуальную сессию из замыкания этого вопроса.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentQuestion?.id, questionStartedAt, session?.id, session?.status])
 
   if (!session) {
     return (
@@ -2954,7 +3264,7 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
   if (session.status === 'new') {
     return (
       <main className="candidate-shell centered">
-        <span className="eyebrow">Оценка компетенций: {ASSESSMENT_LABELS[session.assessmentType ?? 'marketer']}</span>
+        <span className="eyebrow">Оценка компетенций: {getAssessmentLabel(session.assessmentType, questionSections)}</span>
         <h1>{session.candidate.fullName}</h1>
         <p>Ответ выбирается одним касанием. Первый вопрос тестовый и нужен только для знакомства с интерфейсом.</p>
         <button className="primary wide" type="button" onClick={start}>
