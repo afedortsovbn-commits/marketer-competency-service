@@ -8,6 +8,7 @@ import {
   Trash2,
   Plus,
   QrCode,
+  Send,
   ShieldCheck,
   Square,
   StopCircle,
@@ -1611,6 +1612,8 @@ const getSessionByType = (group: CandidateGroup, type: AssessmentType) =>
   group.sessions.find((session) => (session.assessmentType ?? 'marketer') === type)
 const canShowResults = (session?: TestSession) =>
   Boolean(session && (session.status === 'completed' || session.status === 'terminated'))
+const answerText = (question: Question | undefined, selectedIndex: number) =>
+  selectedIndex < 0 ? 'Без ответа' : question?.answers[selectedIndex] ?? 'Без ответа'
 const normalizeUsers = (users: unknown) =>
   toList<UserAccount>(users).map((user, index) => ({
     ...user,
@@ -1854,11 +1857,8 @@ function HrApp() {
   }, [activeLogin, users, usersReady])
 
   useEffect(() => {
-    if (!selectedCandidateId && candidateGroups[0]) {
-      window.setTimeout(() => setSelectedCandidateId(candidateGroups[0].id), 0)
-    }
     if (selectedCandidateId && !candidateGroups.some((group) => group.id === selectedCandidateId)) {
-      window.setTimeout(() => setSelectedCandidateId(candidateGroups[0]?.id ?? null), 0)
+      window.setTimeout(() => setSelectedCandidateId(null), 0)
     }
   }, [candidateGroups, selectedCandidateId])
 
@@ -1948,6 +1948,24 @@ function HrApp() {
     )
   }
 
+  const restartSession = (id: string, maxSeconds: number) => {
+    saveSessions(
+      sessions.map((session) =>
+        session.id === id
+          ? {
+              ...session,
+              maxSeconds: Math.max(10, Math.min(180, maxSeconds)),
+              status: 'new',
+              currentIndex: 0,
+              answers: [],
+              startedAt: undefined,
+              finishedAt: undefined,
+            }
+          : session,
+      ),
+    )
+  }
+
   const logout = () => {
     localStorage.removeItem(STORAGE_ACTIVE_USER)
     setActiveLogin(null)
@@ -1989,6 +2007,10 @@ function HrApp() {
           </div>
           <h1>Оценка компетенций</h1>
           <p>Сервис для HR: ссылки, QR-коды, таймер, мониторинг прохождения и итоговая оценка.</p>
+          <a className="telegram-link" href="https://t.me/Alex_Fedortsov" target="_blank" rel="noreferrer">
+            <Send size={17} />
+            Для доступа обращайтесь в Telegram @Alex_Fedortsov
+          </a>
           {!usersReady ? (
             <div className="loading-box">Загружаем аккаунты...</div>
           ) : (
@@ -2066,6 +2088,7 @@ function HrApp() {
         onUpdate={updateCandidate}
         onEnsureSession={ensureSession}
         onFinish={finishSession}
+        onRestart={restartSession}
       />
 
       {activeOverlay === 'accounts' && isOwner && (
@@ -2206,6 +2229,7 @@ function CandidateWorkspace({
   onUpdate,
   onEnsureSession,
   onFinish,
+  onRestart,
 }: {
   users: UserAccount[]
   activeLogin: string | null
@@ -2220,6 +2244,7 @@ function CandidateWorkspace({
     maxSeconds: number,
   ) => string | undefined
   onFinish: (id: string) => void
+  onRestart: (id: string, maxSeconds: number) => void
 }) {
   const [draftOpen, setDraftOpen] = useState(false)
   const selected = groups.find((group) => group.id === selectedCandidateId)
@@ -2235,7 +2260,7 @@ function CandidateWorkspace({
         <h2>Соискатели</h2>
         <button className="primary compact" type="button" onClick={() => setDraftOpen(true)}>
           <Plus size={18} />
-          Новый соискатель
+          Добавить
         </button>
       </div>
 
@@ -2262,6 +2287,7 @@ function CandidateWorkspace({
             onUpdate={onUpdate}
             onEnsureSession={onEnsureSession}
             onFinish={onFinish}
+            onRestart={onRestart}
           />
         ))}
         {!groups.length && !draftOpen && (
@@ -2287,6 +2313,7 @@ function CandidateCard({
   onUpdate,
   onEnsureSession,
   onFinish,
+  onRestart,
   onCancel,
 }: {
   mode: 'new' | 'existing'
@@ -2303,6 +2330,7 @@ function CandidateCard({
     maxSeconds: number,
   ) => string | undefined
   onFinish?: (id: string) => void
+  onRestart?: (id: string, maxSeconds: number) => void
   onCancel?: () => void
 }) {
   const [activeTab, setActiveTab] = useState<'candidate' | AssessmentType>('candidate')
@@ -2345,22 +2373,13 @@ function CandidateCard({
     }
   }
 
-  const statusSummary = group
-    ? ASSESSMENT_TYPES.map((type) => getSessionByType(group, type))
-        .filter(Boolean)
-        .map((session) => statusLabel(session!.status))
-        .join(', ') || 'Опросы еще не создавались'
-    : 'Заполните данные и выберите опрос'
-
   return (
     <article className={`candidate-card ${expanded ? 'expanded' : ''}`}>
       {mode === 'existing' && group && (
         <button className="candidate-card-head" type="button" onClick={onToggle}>
           <span>
             <strong>{group.candidate.fullName}</strong>
-            <em>{group.candidate.role || 'Позиция не указана'}</em>
           </span>
-          <small>{statusSummary}</small>
         </button>
       )}
 
@@ -2422,6 +2441,7 @@ function CandidateCard({
               assessmentType={activeTab}
               onEnsureSession={onEnsureSession}
               onFinish={onFinish}
+              onRestart={onRestart}
             />
           ) : null}
         </div>
@@ -2524,6 +2544,7 @@ function AssessmentTab({
   assessmentType,
   onEnsureSession,
   onFinish,
+  onRestart,
 }: {
   group: CandidateGroup
   assessmentType: AssessmentType
@@ -2533,6 +2554,7 @@ function AssessmentTab({
     maxSeconds: number,
   ) => string | undefined
   onFinish?: (id: string) => void
+  onRestart?: (id: string, maxSeconds: number) => void
 }) {
   const session = getSessionByType(group, assessmentType)
   const [maxSeconds, setMaxSeconds] = useState(session?.maxSeconds ?? 45)
@@ -2550,10 +2572,35 @@ function AssessmentTab({
     onEnsureSession?.(group, assessmentType, Math.max(10, Math.min(180, maxSeconds)))
   }
 
+  const restart = () => {
+    if (!session) return
+    onRestart?.(session.id, Math.max(10, Math.min(180, maxSeconds)))
+  }
+
+  const questions = session ? getQuestionBank(session.assessmentType) : []
+  const currentQuestion = session ? questions[session.currentIndex] : undefined
+  const answeredCount = session?.answers.length ?? 0
+  const totalCount = questions.length
+
   if (canShowResults(session)) {
-    const questions = getQuestionBank(session!.assessmentType)
     return (
       <div className="assessment-result">
+        <div className="assessment-actions">
+          <label>
+            Время на вопрос при повторе, секунд
+            <input
+              type="number"
+              min={10}
+              max={180}
+              value={maxSeconds}
+              onChange={(event) => setMaxSeconds(Number(event.target.value))}
+            />
+          </label>
+          <button className="primary" type="button" onClick={restart}>
+            <QrCode size={18} />
+            Пройти заново
+          </button>
+        </div>
         <ResultsPanel result={calculateResults(session!)} title="Итоговая оценка HR" />
         <div className="answer-log full">
           {session!.answers.map((answer, index) => {
@@ -2562,7 +2609,7 @@ function AssessmentTab({
               <article className="answer-item" key={`${answer.questionId}-${index}`}>
                 <div>
                   <strong>{question?.text}</strong>
-                  <p>{question?.answers[answer.selectedIndex]}</p>
+                  <p>{answerText(question, answer.selectedIndex)}</p>
                 </div>
                 <span className={answer.isCorrect ? 'pill ok' : 'pill bad'}>
                   {answer.isCorrect ? 'Верно' : 'Неверно'}
@@ -2600,6 +2647,19 @@ function AssessmentTab({
       </button>
       {session && (
         <>
+          <div className="live-monitor">
+            <span className="eyebrow">Мониторинг прохождения</span>
+            <strong>
+              Ответил на {answeredCount} из {totalCount} вопросов
+            </strong>
+            <p>
+              {session.status === 'in_progress'
+                ? currentQuestion
+                  ? `Текущий вопрос ${session.currentIndex + 1}: ${currentQuestion.text}`
+                  : 'Соискатель отвечает на тест'
+                : 'Соискатель еще не начал тест'}
+            </p>
+          </div>
           {qr && <img className="qr" src={qr} alt="QR-код для прохождения теста" />}
           <div className="copy-row">
             <input readOnly value={testUrl} />
@@ -2630,6 +2690,27 @@ function AssessmentTab({
               Завершить тестирование
             </button>
           )}
+          <div className="answer-log full">
+            {session.answers.map((answer, index) => {
+              const question = getQuestion(answer.questionId, session.assessmentType)
+              return (
+                <article className="answer-item" key={`${answer.questionId}-${index}`}>
+                  <div>
+                    <strong>
+                      {index + 1}. {question?.text}
+                    </strong>
+                    <p>{answerText(question, answer.selectedIndex)}</p>
+                  </div>
+                  <span className={answer.isCorrect ? 'pill ok' : 'pill bad'}>
+                    {answer.isCorrect ? 'Верно' : 'Неверно'}
+                  </span>
+                </article>
+              )
+            })}
+            {!session.answers.length && (
+              <p className="muted">Ответы появятся здесь сразу во время прохождения.</p>
+            )}
+          </div>
         </>
       )}
     </div>
@@ -2832,7 +2913,7 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
       setSecondsLeft((value) => {
         if (value <= 1) {
           window.clearInterval(timer)
-          submitAnswer(currentQuestion.answers.length - 1)
+          submitAnswer(-1)
           return 0
         }
         return value - 1
@@ -2863,8 +2944,9 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
 
   if (finished) {
     return (
-      <main className="candidate-shell">
-        <ResultsPanel result={calculateResults(session)} title="Ваш результат" />
+      <main className="candidate-shell centered">
+        <CheckCircle2 size={42} />
+        <h1>Спасибо за пройденный тест</h1>
       </main>
     )
   }

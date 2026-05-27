@@ -25,6 +25,16 @@
   padding: 28px;
 }
 
+.telegram-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--accent);
+  font-weight: 800;
+  text-decoration: none;
+}
+
 .brand-mark {
   width: 48px;
   height: 48px;
@@ -272,6 +282,13 @@ button {
 
 .candidate-list-head h2 {
   margin: 0;
+  font-size: 14px;
+}
+
+.candidate-list-head .compact {
+  min-height: 32px;
+  padding: 6px 9px;
+  font-size: 13px;
 }
 
 .candidate-list {
@@ -287,38 +304,21 @@ button {
 }
 
 .candidate-card-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
+  display: block;
   width: 100%;
-  padding: 14px 16px;
+  padding: 12px 16px;
   color: var(--text);
   background: transparent;
   text-align: left;
 }
 
 .candidate-card-head span {
-  display: grid;
-  gap: 3px;
+  display: block;
   min-width: 0;
 }
 
-.candidate-card-head strong,
-.candidate-card-head em {
+.candidate-card-head strong {
   overflow-wrap: anywhere;
-}
-
-.candidate-card-head em {
-  color: var(--muted);
-  font-size: 13px;
-  font-style: normal;
-}
-
-.candidate-card-head small {
-  align-self: center;
-  color: var(--muted);
-  font-weight: 800;
-  text-align: right;
 }
 
 .candidate-card.expanded {
@@ -333,15 +333,16 @@ button {
 }
 
 .candidate-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: flex;
   gap: 4px;
   padding: 4px;
+  overflow-x: auto;
   background: var(--soft);
   border-radius: 8px;
 }
 
 .candidate-tabs button {
+  flex: 0 0 auto;
   min-height: 38px;
   padding: 8px 10px;
   color: var(--muted);
@@ -372,11 +373,33 @@ button {
 }
 
 .candidate-form label,
-.assessment-start label {
+.assessment-start label,
+.assessment-actions label {
   display: grid;
   gap: 7px;
   color: var(--muted);
   font-size: 14px;
+}
+
+.assessment-actions {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.live-monitor {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  background: var(--soft);
+  border-radius: 8px;
+}
+
+.live-monitor strong,
+.live-monitor p {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .form-actions {
@@ -915,7 +938,6 @@ details ol {
   .dashboard-grid,
   .details-layout,
   .inline-form,
-  .candidate-tabs,
   .result-blocks {
     grid-template-columns: 1fr;
   }
@@ -945,12 +967,8 @@ details ol {
     width: 100%;
   }
 
-  .candidate-card-head {
+  .assessment-actions {
     grid-template-columns: 1fr;
-  }
-
-  .candidate-card-head small {
-    text-align: left;
   }
 
   summary {
