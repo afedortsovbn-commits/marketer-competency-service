@@ -1643,7 +1643,9 @@ const groupCandidateSessions = (sessions: TestSession[]): CandidateGroup[] => {
   return [...groups.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 }
 const getSessionByType = (group: CandidateGroup, type: AssessmentType) =>
-  group.sessions.find((session) => (session.assessmentType ?? 'marketer') === type)
+  [...group.sessions]
+    .filter((session) => (session.assessmentType ?? 'marketer') === type)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
 const canShowResults = (session?: TestSession) =>
   Boolean(session && (session.status === 'completed' || session.status === 'terminated'))
 const answerText = (question: Question | undefined, selectedIndex: number) =>
@@ -2032,9 +2034,12 @@ function HrApp() {
     return session.id
   }
 
-  const finishSession = (id: string) => {
+  const finishSession = async (id: string) => {
+    const latestSessions = firebaseEnabled
+      ? normalizeSessions(await readRemoteState<unknown>('sessions', getSessions()))
+      : getSessions()
     saveSessions(
-      sessions.map((session) =>
+      latestSessions.map((session) =>
         session.id === id
           ? {
               ...session,
@@ -2047,21 +2052,20 @@ function HrApp() {
   }
 
   const restartSession = (id: string, maxSeconds: number) => {
-    saveSessions(
-      sessions.map((session) =>
-        session.id === id
-          ? {
-              ...session,
-              maxSeconds: Math.max(10, Math.min(180, maxSeconds)),
-              status: 'new',
-              currentIndex: 0,
-              answers: [],
-              startedAt: undefined,
-              finishedAt: undefined,
-            }
-          : session,
-      ),
-    )
+    const source = sessions.find((session) => session.id === id)
+    if (!source) return
+    const newSession: TestSession = {
+      ...source,
+      id: createId(),
+      createdAt: new Date().toISOString(),
+      maxSeconds: Math.max(10, Math.min(180, maxSeconds)),
+      status: 'new',
+      currentIndex: 0,
+      answers: [],
+      startedAt: undefined,
+      finishedAt: undefined,
+    }
+    saveSessions([newSession, ...sessions.filter((session) => session.id !== id)])
   }
 
   const logout = () => {
@@ -2695,6 +2699,10 @@ function AssessmentTab({
   const currentQuestion = session ? questions[session.currentIndex] : undefined
   const answeredCount = session?.answers.length ?? 0
   const totalCount = questions.length
+  const lastAnswer = session?.answers.at(-1)
+  const lastAnswerQuestion = lastAnswer
+    ? getQuestion(lastAnswer.questionId, session?.assessmentType, questionSections)
+    : undefined
 
   if (canShowResults(session)) {
     return (
@@ -2773,6 +2781,15 @@ function AssessmentTab({
                   : 'Соискатель отвечает на тест'
                 : 'Соискатель еще не начал тест'}
             </p>
+            {lastAnswer && (
+              <div className="last-answer">
+                <span>Последний ответ</span>
+                <strong>{answerText(lastAnswerQuestion, lastAnswer.selectedIndex)}</strong>
+                <em className={lastAnswer.isCorrect ? 'ok' : 'bad'}>
+                  {lastAnswer.isCorrect ? 'Верно' : 'Неверно'}
+                </em>
+              </div>
+            )}
           </div>
           {qr && <img className="qr" src={qr} alt="QR-код для прохождения теста" />}
           <div className="copy-row">

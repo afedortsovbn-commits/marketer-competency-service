@@ -402,6 +402,43 @@ button {
   overflow-wrap: anywhere;
 }
 
+.last-answer {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.last-answer span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.last-answer strong {
+  color: var(--text);
+}
+
+.last-answer em {
+  width: max-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.last-answer em.ok {
+  color: #027a48;
+  background: #dcfae6;
+}
+
+.last-answer em.bad {
+  color: #b42318;
+  background: #fee4e2;
+}
+
 .form-actions {
   display: flex;
   flex-wrap: wrap;
