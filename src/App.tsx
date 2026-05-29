@@ -1588,11 +1588,23 @@ const mergeSessions = (...sources: TestSession[][]) => {
   })
   return [...merged.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 }
+const getSessionRecordPath = (id: string) => `sessionsById/${id}`
+const saveSessionRecord = async (session: TestSession) => {
+  if (!firebaseEnabled) return false
+  return saveRemoteState(getSessionRecordPath(session.id), session)
+}
+const readSessionRecord = async (id: string) => {
+  if (!firebaseEnabled) return undefined
+  const value = await readRemoteState<unknown>(getSessionRecordPath(id), null)
+  return normalizeSessions(value ? [value] : [])[0]
+}
 const setSessions = async (sessions: TestSession[]) => {
   const localSessions = getSessions()
   const merged = mergeSessions(localSessions, normalizeSessions(sessions))
   writeJson(STORAGE_SESSIONS, merged)
-  if (firebaseEnabled) await saveRemoteState('sessions', merged)
+  if (firebaseEnabled) {
+    await Promise.all([saveRemoteState('sessions', merged), ...merged.map(saveSessionRecord)])
+  }
   return merged
 }
 const getUsers = () => normalizeUsers(readJson<UserAccount[]>(STORAGE_USERS, []))
@@ -1607,6 +1619,25 @@ const getRoute = () => {
   const hash = window.location.hash.replace(/^#\/?/, '')
   const [name, id] = hash.split('/')
   return { name: name || 'hr', id }
+}
+
+const encodeSessionSeed = (session: TestSession) => {
+  try {
+    return btoa(encodeURIComponent(JSON.stringify(session)))
+  } catch {
+    return ''
+  }
+}
+
+const readSessionSeed = (id: string) => {
+  try {
+    const seed = new URLSearchParams(window.location.search).get('seed')
+    if (!seed) return undefined
+    const session = normalizeSessions([JSON.parse(decodeURIComponent(atob(seed)))])[0]
+    return session?.id === id ? session : undefined
+  } catch {
+    return undefined
+  }
 }
 
 const toList = <T,>(value: unknown): T[] => {
@@ -2053,6 +2084,7 @@ function HrApp() {
       activeLogin,
       visibleTo,
     )
+    void saveSessionRecord(session)
     saveSessions([session, ...sessions])
     setSelectedCandidateId(candidateId)
   }
@@ -2096,6 +2128,7 @@ function HrApp() {
       createdBy,
       group.visibleTo,
     )
+    void saveSessionRecord(session)
     saveSessions([session, ...sessions])
     return session.id
   }
@@ -2115,9 +2148,17 @@ function HrApp() {
           : session,
       ),
     )
+    const stoppedSession = latestSessions.find((session) => session.id === id)
+    if (stoppedSession) {
+      void saveSessionRecord({
+        ...stoppedSession,
+        status: 'terminated',
+        finishedAt: new Date().toISOString(),
+      })
+    }
   }
 
-  const restartSession = (id: string, maxSeconds: number) => {
+  const restartSession = async (id: string, maxSeconds: number) => {
     const source = sessions.find((session) => session.id === id)
     if (!source) return
     const newSession: TestSession = {
@@ -2131,6 +2172,7 @@ function HrApp() {
       startedAt: undefined,
       finishedAt: undefined,
     }
+    await saveSessionRecord(newSession)
     saveSessions([newSession, ...sessions.filter((session) => session.id !== id)])
   }
 
@@ -2743,8 +2785,9 @@ function AssessmentTab({
   const session = getSessionByType(group, assessmentType)
   const [maxSeconds, setMaxSeconds] = useState(session?.maxSeconds ?? 45)
   const [qr, setQr] = useState('')
+  const sessionSeed = session ? encodeSessionSeed(session) : ''
   const testUrl = session
-    ? `${window.location.origin}${window.location.pathname}#/test/${session.id}`
+    ? `${window.location.origin}${window.location.pathname}?seed=${encodeURIComponent(sessionSeed)}#/test/${session.id}`
     : ''
 
   useEffect(() => {
@@ -3235,7 +3278,9 @@ function QuestionCatalog({
 function CandidateApp({ sessionId }: { sessionId: string }) {
   const [sessions, saveSessions, sessionsReady] = useStoredSessions()
   const [questionSections] = useStoredQuestionSections()
-  const session = sessions.find((item) => item.id === sessionId)
+  const [remoteSession, setRemoteSession] = useState<TestSession | undefined>(() => readSessionSeed(sessionId))
+  const [recordReady, setRecordReady] = useState(Boolean(remoteSession) || !firebaseEnabled)
+  const session = remoteSession ?? sessions.find((item) => item.id === sessionId)
   const [secondsLeft, setSecondsLeft] = useState(session?.maxSeconds ?? 45)
   const [questionStartedAt, setQuestionStartedAt] = useState(0)
   const [savedFlash, setSavedFlash] = useState(false)
@@ -3248,9 +3293,40 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
   const finished = session?.status === 'completed'
   const terminated = session?.status === 'terminated'
 
+  useEffect(() => {
+    const seedSession = readSessionSeed(sessionId)
+    if (seedSession) {
+      void saveSessionRecord(seedSession)
+      void setSessions(mergeSessions(getSessions(), [seedSession]))
+    }
+    if (!firebaseEnabled) return undefined
+    let stopped = false
+    void readSessionRecord(sessionId).then((record) => {
+      if (stopped) return
+      if (record) setRemoteSession(record)
+      setRecordReady(true)
+    })
+    const unsubscribe = subscribeRemoteState<unknown>(
+      getSessionRecordPath(sessionId),
+      null,
+      (value) => {
+        const record = normalizeSessions(value ? [value] : [])[0]
+        if (record) setRemoteSession((current) => (current ? mergeSessionPair(current, record) : record))
+        setRecordReady(true)
+      },
+    )
+    return () => {
+      stopped = true
+      unsubscribe()
+    }
+  }, [sessionId])
+
   const updateSession = (updater: (session: TestSession) => TestSession) => {
     if (!session) return
-    saveSessions(sessions.map((item) => (item.id === session.id ? updater(item) : item)))
+    const updated = updater(session)
+    setRemoteSession(updated)
+    void saveSessionRecord(updated)
+    saveSessions(mergeSessions(sessions, [updated]))
   }
 
   const start = () => {
@@ -3319,12 +3395,12 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
   }, [currentQuestion?.id, questionStartedAt, session?.id, session?.status])
 
   useEffect(() => {
-    if (session || !sessionsReady) return undefined
+    if (session || !sessionsReady || !recordReady) return undefined
     const timer = window.setTimeout(() => setNotFoundDelayPassed(true), 20000)
     return () => window.clearTimeout(timer)
-  }, [session, sessionsReady, sessionId])
+  }, [session, sessionsReady, recordReady, sessionId])
 
-  if (!sessionsReady || (!session && !notFoundDelayPassed)) {
+  if (!sessionsReady || !recordReady || (!session && !notFoundDelayPassed)) {
     return (
       <main className="candidate-shell centered">
         <h1>Загружаем тест</h1>
