@@ -1591,7 +1591,11 @@ const mergeSessions = (...sources: TestSession[][]) => {
 const getSessionRecordPath = (id: string) => `sessionsById/${id}`
 const saveSessionRecord = async (session: TestSession) => {
   if (!firebaseEnabled) return false
-  return saveRemoteState(getSessionRecordPath(session.id), session)
+  const existing = await readSessionRecord(session.id)
+  return saveRemoteState(
+    getSessionRecordPath(session.id),
+    existing ? mergeSessionPair(existing, session) : session,
+  )
 }
 const readSessionRecord = async (id: string) => {
   if (!firebaseEnabled) return undefined
@@ -2782,7 +2786,9 @@ function AssessmentTab({
   onFinish?: (id: string) => void
   onRestart?: (id: string, maxSeconds: number) => void
 }) {
-  const session = getSessionByType(group, assessmentType)
+  const baseSession = getSessionByType(group, assessmentType)
+  const [liveSession, setLiveSession] = useState<TestSession | undefined>()
+  const session = liveSession ?? baseSession
   const [maxSeconds, setMaxSeconds] = useState(session?.maxSeconds ?? 45)
   const [qr, setQr] = useState('')
   const sessionSeed = session ? encodeSessionSeed(session) : ''
@@ -2794,6 +2800,30 @@ function AssessmentTab({
     if (!testUrl) return
     QRCode.toDataURL(testUrl, { margin: 1, width: 220 }).then(setQr)
   }, [testUrl])
+
+  useEffect(() => {
+    if (!baseSession?.id || !firebaseEnabled) return undefined
+    let stopped = false
+    void readSessionRecord(baseSession.id).then((record) => {
+      if (!stopped && record) {
+        setLiveSession(mergeSessionPair(baseSession, record))
+      }
+    })
+    const unsubscribe = subscribeRemoteState<unknown>(
+      getSessionRecordPath(baseSession.id),
+      null,
+      (value) => {
+        const record = normalizeSessions(value ? [value] : [])[0]
+        if (record) {
+          setLiveSession((current) => mergeSessionPair(current ?? baseSession, record))
+        }
+      },
+    )
+    return () => {
+      stopped = true
+      unsubscribe()
+    }
+  }, [baseSession])
 
   const startOrUpdate = () => {
     onEnsureSession?.(group, assessmentType, Math.max(10, Math.min(180, maxSeconds)))
