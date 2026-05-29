@@ -1590,10 +1590,7 @@ const mergeSessions = (...sources: TestSession[][]) => {
 }
 const setSessions = async (sessions: TestSession[]) => {
   const localSessions = getSessions()
-  const remoteSessions = firebaseEnabled
-    ? normalizeSessions(await readRemoteState<unknown>('sessions', localSessions))
-    : []
-  const merged = mergeSessions(remoteSessions, localSessions, normalizeSessions(sessions))
+  const merged = mergeSessions(localSessions, normalizeSessions(sessions))
   writeJson(STORAGE_SESSIONS, merged)
   if (firebaseEnabled) await saveRemoteState('sessions', merged)
   return merged
@@ -3323,7 +3320,7 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
 
   useEffect(() => {
     if (session || !sessionsReady) return undefined
-    const timer = window.setTimeout(() => setNotFoundDelayPassed(true), 5000)
+    const timer = window.setTimeout(() => setNotFoundDelayPassed(true), 20000)
     return () => window.clearTimeout(timer)
   }, [session, sessionsReady, sessionId])
 
