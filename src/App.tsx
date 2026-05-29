@@ -1539,31 +1539,52 @@ const writeJson = <T,>(key: string, value: T) => {
 }
 
 const getSessions = () => normalizeSessions(readJson<unknown>(STORAGE_SESSIONS, []))
-const sessionRank = (session: TestSession) => {
-  const statusRank: Record<TestSession['status'], number> = {
-    new: 0,
-    in_progress: 1,
-    terminated: 2,
-    completed: 3,
-  }
-  return (
-    session.answers.length * 1000 +
-    statusRank[session.status] * 100 +
-    (session.finishedAt ? 10 : 0) +
-    (session.startedAt ? 1 : 0)
-  )
+const statusPriority: Record<TestSession['status'], number> = {
+  new: 0,
+  in_progress: 1,
+  completed: 2,
+  terminated: 3,
 }
-const preferSession = (left: TestSession, right: TestSession) => {
-  const leftRank = sessionRank(left)
-  const rightRank = sessionRank(right)
-  if (leftRank !== rightRank) return leftRank > rightRank ? left : right
-  return left.createdAt.localeCompare(right.createdAt) >= 0 ? left : right
+const latestIso = (...values: Array<string | undefined>) =>
+  values.filter(Boolean).sort().at(-1)
+const earliestIso = (...values: Array<string | undefined>) =>
+  values.filter(Boolean).sort()[0]
+const mergeAnswers = (...sources: AnswerRecord[][]) => {
+  const answers = new Map<string, AnswerRecord>()
+  sources.flat().forEach((answer) => {
+    const current = answers.get(answer.questionId)
+    if (!current || (answer.answeredAt ?? '').localeCompare(current.answeredAt ?? '') >= 0) {
+      answers.set(answer.questionId, answer)
+    }
+  })
+  return [...answers.values()].sort((left, right) => left.answeredAt.localeCompare(right.answeredAt))
+}
+const mergeSessionPair = (left: TestSession, right: TestSession): TestSession => {
+  const base = left.createdAt.localeCompare(right.createdAt) >= 0 ? left : right
+  const status = statusPriority[left.status] >= statusPriority[right.status] ? left.status : right.status
+  return {
+    ...base,
+    candidate: {
+      ...left.candidate,
+      ...right.candidate,
+    },
+    visibleTo: [...new Set([...(left.visibleTo ?? []), ...(right.visibleTo ?? [])])],
+    maxSeconds: right.maxSeconds ?? left.maxSeconds,
+    status,
+    currentIndex: Math.max(left.currentIndex ?? 0, right.currentIndex ?? 0),
+    answers: mergeAnswers(left.answers ?? [], right.answers ?? []),
+    startedAt: earliestIso(left.startedAt, right.startedAt),
+    finishedAt:
+      status === 'completed' || status === 'terminated'
+        ? latestIso(left.finishedAt, right.finishedAt) ?? new Date().toISOString()
+        : undefined,
+  }
 }
 const mergeSessions = (...sources: TestSession[][]) => {
   const merged = new Map<string, TestSession>()
   sources.flat().forEach((session) => {
     const current = merged.get(session.id)
-    merged.set(session.id, current ? preferSession(current, session) : session)
+    merged.set(session.id, current ? mergeSessionPair(current, session) : session)
   })
   return [...merged.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 }
