@@ -1539,9 +1539,43 @@ const writeJson = <T,>(key: string, value: T) => {
 }
 
 const getSessions = () => normalizeSessions(readJson<unknown>(STORAGE_SESSIONS, []))
-const setSessions = (sessions: TestSession[]) => {
-  writeJson(STORAGE_SESSIONS, sessions)
-  if (firebaseEnabled) void saveRemoteState('sessions', sessions)
+const sessionRank = (session: TestSession) => {
+  const statusRank: Record<TestSession['status'], number> = {
+    new: 0,
+    in_progress: 1,
+    terminated: 2,
+    completed: 3,
+  }
+  return (
+    session.answers.length * 1000 +
+    statusRank[session.status] * 100 +
+    (session.finishedAt ? 10 : 0) +
+    (session.startedAt ? 1 : 0)
+  )
+}
+const preferSession = (left: TestSession, right: TestSession) => {
+  const leftRank = sessionRank(left)
+  const rightRank = sessionRank(right)
+  if (leftRank !== rightRank) return leftRank > rightRank ? left : right
+  return left.createdAt.localeCompare(right.createdAt) >= 0 ? left : right
+}
+const mergeSessions = (...sources: TestSession[][]) => {
+  const merged = new Map<string, TestSession>()
+  sources.flat().forEach((session) => {
+    const current = merged.get(session.id)
+    merged.set(session.id, current ? preferSession(current, session) : session)
+  })
+  return [...merged.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+}
+const setSessions = async (sessions: TestSession[]) => {
+  const localSessions = getSessions()
+  const remoteSessions = firebaseEnabled
+    ? normalizeSessions(await readRemoteState<unknown>('sessions', localSessions))
+    : []
+  const merged = mergeSessions(remoteSessions, localSessions, normalizeSessions(sessions))
+  writeJson(STORAGE_SESSIONS, merged)
+  if (firebaseEnabled) await saveRemoteState('sessions', merged)
+  return merged
 }
 const getUsers = () => normalizeUsers(readJson<UserAccount[]>(STORAGE_USERS, []))
 const setStoredUsers = (users: UserAccount[]) => {
@@ -1659,6 +1693,7 @@ const normalizeUsers = (users: unknown) =>
 
 function useStoredSessions() {
   const [sessions, setLocalSessions] = useState<TestSession[]>(() => getSessions())
+  const [ready, setReady] = useState(!firebaseEnabled)
 
   useEffect(() => {
     const sync = () => setLocalSessions(getSessions())
@@ -1682,28 +1717,41 @@ function useStoredSessions() {
       if (!remoteSessions.length && localSessions.length) {
         void saveRemoteState('sessions', localSessions)
         setLocalSessions(localSessions)
+        setReady(true)
         return
       }
-      setLocalSessions(remoteSessions)
-      writeJson(STORAGE_SESSIONS, remoteSessions)
+      const merged = mergeSessions(localSessions, remoteSessions)
+      setLocalSessions(merged)
+      writeJson(STORAGE_SESSIONS, merged)
+      setReady(true)
     })
     const unsubscribe = subscribeRemoteState<unknown>('sessions', [], (remoteValue) => {
       const remoteSessions = normalizeSessions(remoteValue)
-      setLocalSessions(remoteSessions)
-      writeJson(STORAGE_SESSIONS, remoteSessions)
+      const merged = mergeSessions(getSessions(), remoteSessions)
+      setLocalSessions(merged)
+      writeJson(STORAGE_SESSIONS, merged)
+      setReady(true)
     })
+    const pollRemote = window.setInterval(() => {
+      void readRemoteState<unknown>('sessions', getSessions()).then((remoteValue) => {
+        const merged = mergeSessions(getSessions(), normalizeSessions(remoteValue))
+        setLocalSessions(merged)
+        writeJson(STORAGE_SESSIONS, merged)
+      })
+    }, 2000)
     return () => {
       stopped = true
+      window.clearInterval(pollRemote)
       unsubscribe()
     }
   }, [])
 
   const save = (next: TestSession[]) => {
     setLocalSessions(next)
-    setSessions(next)
+    void setSessions(next).then(setLocalSessions)
   }
 
-  return [sessions, save] as const
+  return [sessions, save, ready] as const
 }
 
 function useStoredUsers() {
@@ -1920,7 +1968,7 @@ function App() {
   }, [])
 
   if (route.name === 'test' && route.id) {
-    return <CandidateApp sessionId={route.id} />
+    return <CandidateApp key={route.id} sessionId={route.id} />
   }
 
   return <HrApp />
@@ -3167,12 +3215,13 @@ function QuestionCatalog({
 }
 
 function CandidateApp({ sessionId }: { sessionId: string }) {
-  const [sessions, saveSessions] = useStoredSessions()
+  const [sessions, saveSessions, sessionsReady] = useStoredSessions()
   const [questionSections] = useStoredQuestionSections()
   const session = sessions.find((item) => item.id === sessionId)
   const [secondsLeft, setSecondsLeft] = useState(session?.maxSeconds ?? 45)
   const [questionStartedAt, setQuestionStartedAt] = useState(0)
   const [savedFlash, setSavedFlash] = useState(false)
+  const [notFoundDelayPassed, setNotFoundDelayPassed] = useState(false)
   const deadlineRef = useRef(0)
   const timeoutSubmittedRef = useRef(false)
 
@@ -3250,6 +3299,21 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
     // Интервал должен жить до смены вопроса; submitAnswer берет актуальную сессию из замыкания этого вопроса.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentQuestion?.id, questionStartedAt, session?.id, session?.status])
+
+  useEffect(() => {
+    if (session || !sessionsReady) return undefined
+    const timer = window.setTimeout(() => setNotFoundDelayPassed(true), 5000)
+    return () => window.clearTimeout(timer)
+  }, [session, sessionsReady, sessionId])
+
+  if (!sessionsReady || (!session && !notFoundDelayPassed)) {
+    return (
+      <main className="candidate-shell centered">
+        <h1>Загружаем тест</h1>
+        <p>Проверяем ссылку и готовим вопросы.</p>
+      </main>
+    )
+  }
 
   if (!session) {
     return (
