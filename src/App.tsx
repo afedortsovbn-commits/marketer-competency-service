@@ -1588,6 +1588,8 @@ const mergeSessions = (...sources: TestSession[][]) => {
   })
   return [...merged.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 }
+const sessionsToRecordMap = (sessions: TestSession[]) =>
+  Object.fromEntries(sessions.map((session) => [session.id, session]))
 const getSessionRecordPath = (id: string) => `sessionsById/${id}`
 const saveSessionRecord = async (session: TestSession) => {
   if (!firebaseEnabled) return false
@@ -1623,25 +1625,6 @@ const getRoute = () => {
   const hash = window.location.hash.replace(/^#\/?/, '')
   const [name, id] = hash.split('/')
   return { name: name || 'hr', id }
-}
-
-const encodeSessionSeed = (session: TestSession) => {
-  try {
-    return btoa(encodeURIComponent(JSON.stringify(session)))
-  } catch {
-    return ''
-  }
-}
-
-const readSessionSeed = (id: string) => {
-  try {
-    const seed = new URLSearchParams(window.location.search).get('seed')
-    if (!seed) return undefined
-    const session = normalizeSessions([JSON.parse(decodeURIComponent(atob(seed)))])[0]
-    return session?.id === id ? session : undefined
-  } catch {
-    return undefined
-  }
 }
 
 const toList = <T,>(value: unknown): T[] => {
@@ -1763,12 +1746,18 @@ function useStoredSessions() {
   useEffect(() => {
     if (!firebaseEnabled) return undefined
     let stopped = false
-    void readRemoteState<unknown>('sessions', []).then((remoteValue) => {
+    void readRemoteState<unknown>('sessionsById', {}).then(async (remoteValue) => {
       if (stopped) return
-      const remoteSessions = normalizeSessions(remoteValue)
+      let remoteSessions = normalizeSessions(remoteValue)
+      if (!remoteSessions.length) {
+        remoteSessions = normalizeSessions(await readRemoteState<unknown>('sessions', []))
+      }
       const localSessions = getSessions()
       if (!remoteSessions.length && localSessions.length) {
-        void saveRemoteState('sessions', localSessions)
+        void Promise.all([
+          saveRemoteState('sessions', localSessions),
+          saveRemoteState('sessionsById', sessionsToRecordMap(localSessions)),
+        ])
         setLocalSessions(localSessions)
         setReady(true)
         return
@@ -1778,7 +1767,7 @@ function useStoredSessions() {
       writeJson(STORAGE_SESSIONS, merged)
       setReady(true)
     })
-    const unsubscribe = subscribeRemoteState<unknown>('sessions', [], (remoteValue) => {
+    const unsubscribe = subscribeRemoteState<unknown>('sessionsById', {}, (remoteValue) => {
       const remoteSessions = normalizeSessions(remoteValue)
       const merged = mergeSessions(getSessions(), remoteSessions)
       setLocalSessions(merged)
@@ -1786,7 +1775,7 @@ function useStoredSessions() {
       setReady(true)
     })
     const pollRemote = window.setInterval(() => {
-      void readRemoteState<unknown>('sessions', getSessions()).then((remoteValue) => {
+      void readRemoteState<unknown>('sessionsById', {}).then((remoteValue) => {
         const merged = mergeSessions(getSessions(), normalizeSessions(remoteValue))
         setLocalSessions(merged)
         writeJson(STORAGE_SESSIONS, merged)
@@ -2138,8 +2127,9 @@ function HrApp() {
   }
 
   const finishSession = async (id: string) => {
-    const latestSessions = firebaseEnabled
-      ? normalizeSessions(await readRemoteState<unknown>('sessions', getSessions()))
+    const directSession = await readSessionRecord(id)
+    const latestSessions = directSession
+      ? mergeSessions(getSessions(), [directSession])
       : getSessions()
     saveSessions(
       latestSessions.map((session) =>
@@ -2791,9 +2781,8 @@ function AssessmentTab({
   const session = liveSession ?? baseSession
   const [maxSeconds, setMaxSeconds] = useState(session?.maxSeconds ?? 45)
   const [qr, setQr] = useState('')
-  const sessionSeed = session ? encodeSessionSeed(session) : ''
   const testUrl = session
-    ? `${window.location.origin}${window.location.pathname}?seed=${encodeURIComponent(sessionSeed)}#/test/${session.id}`
+    ? `${window.location.origin}${window.location.pathname}#/test/${session.id}`
     : ''
 
   useEffect(() => {
@@ -3308,8 +3297,8 @@ function QuestionCatalog({
 function CandidateApp({ sessionId }: { sessionId: string }) {
   const [sessions, saveSessions, sessionsReady] = useStoredSessions()
   const [questionSections] = useStoredQuestionSections()
-  const [remoteSession, setRemoteSession] = useState<TestSession | undefined>(() => readSessionSeed(sessionId))
-  const [recordReady, setRecordReady] = useState(Boolean(remoteSession) || !firebaseEnabled)
+  const [remoteSession, setRemoteSession] = useState<TestSession | undefined>()
+  const [recordReady, setRecordReady] = useState(!firebaseEnabled)
   const session = remoteSession ?? sessions.find((item) => item.id === sessionId)
   const [secondsLeft, setSecondsLeft] = useState(session?.maxSeconds ?? 45)
   const [questionStartedAt, setQuestionStartedAt] = useState(0)
@@ -3324,11 +3313,6 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
   const terminated = session?.status === 'terminated'
 
   useEffect(() => {
-    const seedSession = readSessionSeed(sessionId)
-    if (seedSession) {
-      void saveSessionRecord(seedSession)
-      void setSessions(mergeSessions(getSessions(), [seedSession]))
-    }
     if (!firebaseEnabled) return undefined
     let stopped = false
     void readSessionRecord(sessionId).then((record) => {
