@@ -1609,7 +1609,7 @@ const setSessions = async (sessions: TestSession[]) => {
   const merged = mergeSessions(localSessions, normalizeSessions(sessions))
   writeJson(STORAGE_SESSIONS, merged)
   if (firebaseEnabled) {
-    await Promise.all([saveRemoteState('sessions', merged), ...merged.map(saveSessionRecord)])
+    await saveRemoteState('sessions', merged)
   }
   return merged
 }
@@ -1774,16 +1774,8 @@ function useStoredSessions() {
       writeJson(STORAGE_SESSIONS, merged)
       setReady(true)
     })
-    const pollRemote = window.setInterval(() => {
-      void readRemoteState<unknown>('sessionsById', {}).then((remoteValue) => {
-        const merged = mergeSessions(getSessions(), normalizeSessions(remoteValue))
-        setLocalSessions(merged)
-        writeJson(STORAGE_SESSIONS, merged)
-      })
-    }, 2000)
     return () => {
       stopped = true
-      window.clearInterval(pollRemote)
       unsubscribe()
     }
   }, [])
