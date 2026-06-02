@@ -274,10 +274,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  padding: 14px 16px 6px;
 }
 
 .candidate-list-head h2 {
@@ -1067,6 +1064,132 @@ details ol {
   summary small {
     white-space: normal;
   }
+}
+
+.tests-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.tests-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.competency-section {
+  margin-bottom: 14px;
+}
+
+.competency-section-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #b0b8c4;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.competency-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.competency-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  border: 2px solid transparent;
+  cursor: default;
+}
+
+.competency-chip .chip-score {
+  font-weight: 900;
+}
+
+.competency-chip .chip-count {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.competency-chip.gray {
+  color: #667085;
+  background: #eef2f5;
+}
+
+.competency-chip.selectable {
+  cursor: pointer;
+}
+
+.competency-chip.selected {
+  color: #fff;
+  background: #2563eb;
+  border-color: #1d4ed8;
+}
+
+.survey-modal-body {
+  display: grid;
+  gap: 16px;
+  padding-bottom: 72px;
+}
+
+.survey-modal-section {
+  display: grid;
+  gap: 6px;
+}
+
+.survey-fab {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  padding: 14px 0;
+  background: linear-gradient(transparent, var(--surface) 30%);
+}
+
+.survey-fab button {
+  min-height: 48px;
+  padding: 12px 28px;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 800;
+  box-shadow: 0 4px 16px rgba(27, 141, 75, 0.3);
+}
+
+.tests-empty {
+  display: grid;
+  gap: 8px;
+  place-items: center;
+  padding: 24px;
+  color: var(--muted);
+  background: var(--soft);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.tests-empty h3 {
+  margin: 0;
+  color: var(--text);
+}
+
+.tests-empty p {
+  margin: 0;
+}
+
+.survey-status {
+  margin-top: 14px;
 }
 
 @media (max-width: 480px) {

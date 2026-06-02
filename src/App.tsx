@@ -4,7 +4,6 @@ import {
   ChevronDown,
   CheckCircle2,
   ClipboardCopy,
-  LogOut,
   Trash2,
   Plus,
   QrCode,
@@ -74,6 +73,7 @@ type TestSession = {
   answers: AnswerRecord[]
   startedAt?: string
   finishedAt?: string
+  questionIds?: string[]
 }
 
 type UserAccount = {
@@ -1664,15 +1664,15 @@ const setQuestionSections = (sections: QuestionSection[]) => {
 }
 const getQuestionBank = (type?: AssessmentType, sections = getQuestionSections()) =>
   sections.find((section) => section.id === (type ?? 'marketer'))?.questions ?? sections[0]?.questions ?? []
-const getQuestion = (id: string, type?: AssessmentType, sections = getQuestionSections()) =>
-  getQuestionBank(type, sections).find((question) => question.id === id)
 const getScoredQuestions = (type?: AssessmentType, sections = getQuestionSections()) =>
   getQuestionBank(type, sections).filter((question) => !question.id.endsWith('demo') && question.id !== 'demo')
 const getAssessmentLabel = (type?: AssessmentType, sections = getQuestionSections()) =>
-  sections.find((section) => section.id === (type ?? 'marketer'))?.label ??
-  DEFAULT_ASSESSMENT_LABELS[type ?? 'marketer'] ??
-  type ??
-  'Опрос'
+  type === 'combined'
+    ? 'Комбинированный опрос'
+    : sections.find((section) => section.id === (type ?? 'marketer'))?.label ??
+      DEFAULT_ASSESSMENT_LABELS[type ?? 'marketer'] ??
+      type ??
+      'Опрос'
 const normalizeSessions = (sessions: unknown) =>
   toList<TestSession>(sessions).map((session) => ({
     ...session,
@@ -1681,6 +1681,7 @@ const normalizeSessions = (sessions: unknown) =>
     createdBy: session.createdBy ?? '',
     visibleTo: Array.isArray(session.visibleTo) ? session.visibleTo : toList<string>(session.visibleTo),
     answers: Array.isArray(session.answers) ? session.answers : toList<AnswerRecord>(session.answers),
+    questionIds: Array.isArray(session.questionIds) ? session.questionIds : undefined,
   }))
 const getVisibleSessions = (sessions: TestSession[], login: string) =>
   sessions.filter(
@@ -1712,10 +1713,6 @@ const groupCandidateSessions = (sessions: TestSession[]): CandidateGroup[] => {
   })
   return [...groups.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 }
-const getSessionByType = (group: CandidateGroup, type: AssessmentType) =>
-  [...group.sessions]
-    .filter((session) => (session.assessmentType ?? 'marketer') === type)
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
 const canShowResults = (session?: TestSession) =>
   Boolean(session && (session.status === 'completed' || session.status === 'terminated'))
 const answerText = (question: Question | undefined, selectedIndex: number) =>
@@ -1727,15 +1724,131 @@ const normalizeUsers = (users: unknown) =>
     createdAt: user.createdAt ?? new Date().toISOString(),
   }))
 
+type CompetencyKey = { sectionId: string; competency: string }
+
+const getCompetenciesForSection = (section: QuestionSection): string[] => {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const q of section.questions) {
+    if (!seen.has(q.competency)) {
+      seen.add(q.competency)
+      result.push(q.competency)
+    }
+  }
+  return result
+}
+
+const getQuestionsForCompetency = (
+  sectionId: string,
+  competency: string,
+  sections: QuestionSection[],
+): Question[] => {
+  const section = sections.find((s) => s.id === sectionId)
+  return section?.questions.filter((q) => q.competency === competency) ?? []
+}
+
+const getSessionQuestions = (session: TestSession, sections: QuestionSection[]): Question[] => {
+  if (session.questionIds?.length) {
+    const allQuestions = sections.flatMap((s) => s.questions)
+    const questionMap = new Map(allQuestions.map((q) => [q.id, q]))
+    return session.questionIds.map((id) => questionMap.get(id)).filter(Boolean) as Question[]
+  }
+  return getQuestionBank(session.assessmentType, sections)
+}
+
+const getScoredSessionQuestions = (session: TestSession, sections: QuestionSection[]): Question[] =>
+  getSessionQuestions(session, sections).filter(
+    (q) => !q.id.endsWith('demo') && q.id !== 'demo',
+  )
+
+const compKeyStr = (ck: CompetencyKey) => `${ck.sectionId}::${ck.competency}`
+
+type CompetencyResult = {
+  sectionId: string
+  sectionLabel: string
+  competency: string
+  correct: number
+  total: number
+  percent: number
+}
+
+const getCompetencyResults = (
+  sessions: TestSession[],
+  sections: QuestionSection[],
+): CompetencyResult[] => {
+  const completedSessions = sessions.filter(
+    (s) => s.status === 'completed' || s.status === 'terminated',
+  )
+  const resultMap = new Map<string, CompetencyResult>()
+  for (const session of completedSessions) {
+    const questions = getScoredSessionQuestions(session, sections)
+    const answerMap = new Map(session.answers.map((a) => [a.questionId, a]))
+    for (const section of sections) {
+      const sectionQuestions = questions.filter((q) =>
+        section.questions.some((sq) => sq.id === q.id),
+      )
+      const competencyGroups = new Map<string, Question[]>()
+      for (const q of sectionQuestions) {
+        const list = competencyGroups.get(q.competency) ?? []
+        list.push(q)
+        competencyGroups.set(q.competency, list)
+      }
+      for (const [competency, qs] of competencyGroups) {
+        const key = `${section.id}::${competency}`
+        const existing = resultMap.get(key)
+        const correct = qs.filter((q) => answerMap.get(q.id)?.isCorrect).length
+        const total = qs.length
+        if (!existing || session.createdAt > (existing as { _createdAt?: string })._createdAt!) {
+          resultMap.set(key, {
+            sectionId: section.id,
+            sectionLabel: section.label,
+            competency,
+            correct,
+            total,
+            percent: total ? Math.round((correct / total) * 100) : 0,
+            _createdAt: session.createdAt,
+          } as CompetencyResult & { _createdAt: string })
+        }
+      }
+    }
+  }
+  return [...resultMap.values()]
+}
+
+const percentToColor = (percent: number) => {
+  const r = Math.round(220 - (percent / 100) * 180)
+  const g = Math.round(60 + (percent / 100) * 140)
+  const b = Math.round(40 + (percent / 100) * 20)
+  return `rgb(${r}, ${g}, ${b})`
+}
+
+const percentToBackground = (percent: number) => {
+  const r = Math.round(254 - (percent / 100) * 34)
+  const g = Math.round(228 + (percent / 100) * 22)
+  const b = Math.round(226 - (percent / 100) * (226 - 230))
+  return `rgb(${r}, ${g}, ${b})`
+}
+
+const sessionsDigest = (sessions: TestSession[]) =>
+  sessions.map((s) => `${s.id}:${s.status}:${s.currentIndex}:${s.answers.length}`).join('|')
+
 function useStoredSessions() {
   const [sessions, setLocalSessions] = useState<TestSession[]>(() => getSessions())
   const [ready, setReady] = useState(!firebaseEnabled)
+  const digestRef = useRef(sessionsDigest(sessions))
+
+  const stableSet = (next: TestSession[]) => {
+    const d = sessionsDigest(next)
+    if (d === digestRef.current) return
+    digestRef.current = d
+    setLocalSessions(next)
+  }
 
   useEffect(() => {
-    const sync = () => setLocalSessions(getSessions())
+    const sync = () => stableSet(getSessions())
     window.addEventListener('storage', sync)
     window.addEventListener('assessment-storage', sync)
-    const timer = window.setInterval(sync, 900)
+    const timer = window.setInterval(sync, 2000)
     return () => {
       window.removeEventListener('storage', sync)
       window.removeEventListener('assessment-storage', sync)
@@ -1758,19 +1871,19 @@ function useStoredSessions() {
           saveRemoteState('sessions', localSessions),
           saveRemoteState('sessionsById', sessionsToRecordMap(localSessions)),
         ])
-        setLocalSessions(localSessions)
+        stableSet(localSessions)
         setReady(true)
         return
       }
       const merged = mergeSessions(localSessions, remoteSessions)
-      setLocalSessions(merged)
+      stableSet(merged)
       writeJson(STORAGE_SESSIONS, merged)
       setReady(true)
     })
     const unsubscribe = subscribeRemoteState<unknown>('sessionsById', {}, (remoteValue) => {
       const remoteSessions = normalizeSessions(remoteValue)
       const merged = mergeSessions(getSessions(), remoteSessions)
-      setLocalSessions(merged)
+      stableSet(merged)
       writeJson(STORAGE_SESSIONS, merged)
       setReady(true)
     })
@@ -1781,8 +1894,9 @@ function useStoredSessions() {
   }, [])
 
   const save = (next: TestSession[]) => {
+    digestRef.current = sessionsDigest(next)
     setLocalSessions(next)
-    void setSessions(next).then(setLocalSessions)
+    void setSessions(next).then((merged) => stableSet(merged))
   }
 
   return [sessions, save, ready] as const
@@ -1888,7 +2002,9 @@ function useStoredQuestionSections() {
 }
 
 function calculateResults(session: TestSession, sections = getQuestionSections()) {
-  const scoredQuestions = getScoredQuestions(session.assessmentType, sections)
+  const scoredQuestions = getScoredSessionQuestions(session, sections).length
+    ? getScoredSessionQuestions(session, sections)
+    : getScoredQuestions(session.assessmentType, sections)
   const answerMap = new Map(session.answers.map((answer) => [answer.questionId, answer]))
   const scoredAnswers = scoredQuestions.map((question) => ({
     question,
@@ -1927,11 +2043,14 @@ function calculateResults(session: TestSession, sections = getQuestionSections()
     scoredQuestions,
   )
 
+  const allDirectionLabels = session.assessmentType === 'combined'
+    ? Object.assign({}, ...Object.values(DIRECTION_LABELS))
+    : DIRECTION_LABELS[session.assessmentType ?? 'marketer']
   const directionBlocks = buildBlocks(
     [...new Set(scoredQuestions.map((question) => question.direction))],
     (question) => question.direction,
     answerMap,
-    DIRECTION_LABELS[session.assessmentType ?? 'marketer'],
+    allDirectionLabels,
     scoredQuestions,
   )
 
@@ -2088,31 +2207,26 @@ function HrApp() {
     )
   }
 
-  const ensureSession = (
+  const createCombinedSession = (
     group: CandidateGroup,
-    assessmentType: AssessmentType,
+    questionIds: string[],
     maxSeconds: number,
   ) => {
-    const existing = getSessionByType(group, assessmentType)
-    if (existing) {
-      if (existing.status === 'new' && existing.maxSeconds !== maxSeconds) {
-        saveSessions(
-          sessions.map((session) =>
-            session.id === existing.id ? { ...session, maxSeconds } : session,
-          ),
-        )
-      }
-      return existing.id
+    if (!activeLogin || !questionIds.length) return undefined
+    const session: TestSession = {
+      id: createId(),
+      candidateId: group.id,
+      candidate: group.candidate,
+      assessmentType: 'combined',
+      createdBy: activeLogin,
+      visibleTo: [...new Set([activeLogin, ...group.visibleTo])],
+      createdAt: new Date().toISOString(),
+      maxSeconds: Math.max(10, Math.min(180, maxSeconds)),
+      status: 'new',
+      currentIndex: 0,
+      answers: [],
+      questionIds,
     }
-    const createdBy = activeLogin ?? group.createdBy
-    const session = createSessionDraft(
-      group.id,
-      group.candidate,
-      assessmentType,
-      Math.max(10, Math.min(180, maxSeconds)),
-      createdBy,
-      group.visibleTo,
-    )
     void saveSessionRecord(session)
     saveSessions([session, ...sessions])
     return session.id
@@ -2259,7 +2373,6 @@ function HrApp() {
           {showAccountMenu && (
             <div className="account-dropdown">
               <button type="button" onClick={logout}>
-                <LogOut size={17} />
                 Сменить аккаунт
               </button>
               {isOwner && (
@@ -2270,7 +2383,6 @@ function HrApp() {
                     setShowAccountMenu(false)
                   }}
                 >
-                  <UserPlus size={17} />
                   Управление аккаунтами
                 </button>
               )}
@@ -2281,7 +2393,6 @@ function HrApp() {
                   setShowAccountMenu(false)
                 }}
               >
-                <Square size={17} />
                 Банк вопросов
               </button>
             </div>
@@ -2298,7 +2409,7 @@ function HrApp() {
         onSelect={setSelectedCandidateId}
         onCreate={createCandidate}
         onUpdate={updateCandidate}
-        onEnsureSession={ensureSession}
+        onCreateCombinedSession={createCombinedSession}
         onFinish={finishSession}
         onRestart={restartSession}
       />
@@ -2445,7 +2556,7 @@ function CandidateWorkspace({
   onSelect,
   onCreate,
   onUpdate,
-  onEnsureSession,
+  onCreateCombinedSession,
   onFinish,
   onRestart,
 }: {
@@ -2457,9 +2568,9 @@ function CandidateWorkspace({
   onSelect: (id: string | null) => void
   onCreate: (candidate: Candidate, visibleTo: string[]) => void
   onUpdate: (candidateId: string, candidate: Candidate, visibleTo: string[]) => void
-  onEnsureSession: (
+  onCreateCombinedSession: (
     group: CandidateGroup,
-    assessmentType: AssessmentType,
+    questionIds: string[],
     maxSeconds: number,
   ) => string | undefined
   onFinish: (id: string) => void
@@ -2506,7 +2617,7 @@ function CandidateWorkspace({
             expanded={group.id === selected?.id}
             onToggle={() => onSelect(group.id === selected?.id ? null : group.id)}
             onUpdate={onUpdate}
-            onEnsureSession={onEnsureSession}
+            onCreateCombinedSession={onCreateCombinedSession}
             onFinish={onFinish}
             onRestart={onRestart}
           />
@@ -2533,7 +2644,7 @@ function CandidateCard({
   onToggle,
   onCreate,
   onUpdate,
-  onEnsureSession,
+  onCreateCombinedSession,
   onFinish,
   onRestart,
   onCancel,
@@ -2547,16 +2658,16 @@ function CandidateCard({
   onToggle?: () => void
   onCreate?: (candidate: Candidate, visibleTo: string[]) => void
   onUpdate?: (candidateId: string, candidate: Candidate, visibleTo: string[]) => void
-  onEnsureSession?: (
+  onCreateCombinedSession?: (
     group: CandidateGroup,
-    assessmentType: AssessmentType,
+    questionIds: string[],
     maxSeconds: number,
   ) => string | undefined
   onFinish?: (id: string) => void
   onRestart?: (id: string, maxSeconds: number) => void
   onCancel?: () => void
 }) {
-  const [activeTab, setActiveTab] = useState<'candidate' | AssessmentType>('candidate')
+  const [activeTab, setActiveTab] = useState<'profile' | 'tests'>(mode === 'new' ? 'profile' : 'tests')
   const [candidate, setCandidate] = useState<Candidate>(
     group?.candidate ?? { fullName: '', role: '', contact: '', note: '' },
   )
@@ -2564,6 +2675,7 @@ function CandidateCard({
     group?.visibleTo?.length ? group.visibleTo : activeLogin ? [activeLogin] : [],
   )
   const [error, setError] = useState('')
+  const [showSurveyModal, setShowSurveyModal] = useState(false)
 
   const update = (field: keyof Candidate, value: string) =>
     setCandidate((current) => ({ ...current, [field]: value }))
@@ -2596,6 +2708,10 @@ function CandidateCard({
     }
   }
 
+  const activeSession = group?.sessions.find(
+    (s) => (s.status === 'new' || s.status === 'in_progress') && Array.isArray(s.questionIds) && s.questionIds.length > 0,
+  )
+
   return (
     <article className={`candidate-card ${expanded ? 'expanded' : ''}`}>
       {mode === 'existing' && group && (
@@ -2616,30 +2732,22 @@ function CandidateCard({
           )}
           <div className="candidate-tabs">
             <button
-              className={activeTab === 'candidate' ? 'active' : ''}
+              className={activeTab === 'tests' ? 'active' : ''}
               type="button"
-              onClick={() => setActiveTab('candidate')}
+              onClick={() => setActiveTab('tests')}
             >
-              Соискатель
+              Тесты
             </button>
-            {questionSections.map((section) => {
-              const type = section.id
-              const session = group ? getSessionByType(group, type) : undefined
-              const done = canShowResults(session)
-              return (
-                <button
-                  className={`${activeTab === type ? 'active' : ''} ${done ? 'done' : 'pending'}`}
-                  key={type}
-                  type="button"
-                  onClick={() => setActiveTab(type)}
-                >
-                  {section.label}
-                </button>
-              )
-            })}
+            <button
+              className={activeTab === 'profile' ? 'active' : ''}
+              type="button"
+              onClick={() => setActiveTab('profile')}
+            >
+              Профиль
+            </button>
           </div>
 
-          {activeTab === 'candidate' ? (
+          {activeTab === 'profile' ? (
             <CandidateEditor
               candidate={candidate}
               users={users}
@@ -2656,22 +2764,439 @@ function CandidateCard({
             <div className="test-placeholder">
               <QrCode size={28} />
               <h3>Сначала сохраните соискателя</h3>
-              <p>После сохранения здесь появится QR-код для выбранного опроса.</p>
+              <p>После сохранения здесь появятся тесты.</p>
             </div>
           ) : group ? (
-            <AssessmentTab
-              key={`${group.id}-${activeTab}-${getSessionByType(group, activeTab)?.id ?? 'new'}`}
-              group={group}
-              assessmentType={activeTab}
-              questionSections={questionSections}
-              onEnsureSession={onEnsureSession}
-              onFinish={onFinish}
-              onRestart={onRestart}
-            />
+            <>
+              {activeSession ? (
+                <ActiveSurveyPanel
+                  session={activeSession}
+                  questionSections={questionSections}
+                  onFinish={onFinish}
+                  onRestart={onRestart}
+                />
+              ) : (
+                <TestsOverview
+                  group={group}
+                  questionSections={questionSections}
+                  onCreateSurvey={() => setShowSurveyModal(true)}
+                />
+              )}
+              {showSurveyModal && (
+                <ModalPanel title="Создать опрос" onClose={() => setShowSurveyModal(false)}>
+                  <CreateSurveyModal
+                    group={group}
+                    questionSections={questionSections}
+                    onStart={(questionIds, maxSeconds) => {
+                      onCreateCombinedSession?.(group, questionIds, maxSeconds)
+                      setShowSurveyModal(false)
+                    }}
+                  />
+                </ModalPanel>
+              )}
+            </>
           ) : null}
         </div>
       )}
     </article>
+  )
+}
+
+function TestsOverview({
+  group,
+  questionSections,
+  onCreateSurvey,
+}: {
+  group: CandidateGroup
+  questionSections: QuestionSection[]
+  onCreateSurvey: () => void
+}) {
+  const results = useMemo(
+    () => getCompetencyResults(group.sessions, questionSections),
+    [group.sessions, questionSections],
+  )
+
+  const resultsBySection = useMemo(() => {
+    const map = new Map<string, CompetencyResult[]>()
+    for (const r of results) {
+      const list = map.get(r.sectionId) ?? []
+      list.push(r)
+      map.set(r.sectionId, list)
+    }
+    return map
+  }, [results])
+
+  return (
+    <div>
+      <div className="tests-header">
+        <h3>Результаты</h3>
+        <button
+          className="primary compact"
+          type="button"
+          onClick={onCreateSurvey}
+        >
+          <Plus size={16} />
+          Создать опрос
+        </button>
+      </div>
+      {results.length === 0 ? (
+        <div className="tests-empty">
+          <QrCode size={28} />
+          <h3>Нет пройденных опросов</h3>
+          <p>Создайте опрос, чтобы соискатель мог его пройти.</p>
+        </div>
+      ) : (
+        [...resultsBySection.entries()].map(([sectionId, sectionResults]) => {
+          const sectionLabel = sectionResults[0]?.sectionLabel ?? sectionId
+          return (
+            <div className="competency-section" key={sectionId}>
+              <span className="competency-section-label">{sectionLabel}</span>
+              <div className="competency-chips">
+                {sectionResults.map((r) => (
+                  <span
+                    className="competency-chip"
+                    key={compKeyStr({ sectionId: r.sectionId, competency: r.competency })}
+                    style={{
+                      color: percentToColor(r.percent),
+                      background: percentToBackground(r.percent),
+                    }}
+                  >
+                    {r.competency}
+                    <span className="chip-score">{r.percent}%</span>
+                    <span className="chip-count">{r.correct}/{r.total}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )
+        })
+      )}
+    </div>
+  )
+}
+
+function CreateSurveyModal({
+  group,
+  questionSections,
+  onStart,
+}: {
+  group: CandidateGroup
+  questionSections: QuestionSection[]
+  onStart: (questionIds: string[], maxSeconds: number) => void
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [maxSeconds, setMaxSeconds] = useState(45)
+  const results = useMemo(
+    () => getCompetencyResults(group.sessions, questionSections),
+    [group.sessions, questionSections],
+  )
+  const resultMap = useMemo(() => {
+    const map = new Map<string, CompetencyResult>()
+    for (const r of results) {
+      map.set(compKeyStr({ sectionId: r.sectionId, competency: r.competency }), r)
+    }
+    return map
+  }, [results])
+
+  const toggle = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const selectedQuestionIds = useMemo(() => {
+    const ids: string[] = []
+    for (const keyStr of selected) {
+      const [sectionId, ...rest] = keyStr.split('::')
+      const competency = rest.join('::')
+      const qs = getQuestionsForCompetency(sectionId, competency, questionSections)
+      ids.push(...qs.map((q) => q.id))
+    }
+    return ids
+  }, [selected, questionSections])
+
+  const totalTime = useMemo(() => {
+    const totalQuestions = selectedQuestionIds.length
+    const totalSeconds = totalQuestions * maxSeconds
+    const minutes = Math.ceil(totalSeconds / 60)
+    return minutes
+  }, [selectedQuestionIds, maxSeconds])
+
+  return (
+    <div className="survey-modal-body">
+      <label style={{ display: 'grid', gap: '7px', color: 'var(--muted)', fontSize: '14px' }}>
+        Время на вопрос, секунд
+        <input
+          type="number"
+          min={10}
+          max={180}
+          value={maxSeconds}
+          onChange={(e) => setMaxSeconds(Number(e.target.value))}
+        />
+      </label>
+      {questionSections.map((section) => {
+        const competencies = getCompetenciesForSection(section)
+        return (
+          <div className="survey-modal-section" key={section.id}>
+            <span className="competency-section-label">{section.label}</span>
+            <div className="competency-chips">
+              {competencies.map((comp) => {
+                const key = compKeyStr({ sectionId: section.id, competency: comp })
+                const isSelected = selected.has(key)
+                const result = resultMap.get(key)
+                const questions = getQuestionsForCompetency(section.id, comp, questionSections)
+                const scoredCount = questions.filter(
+                  (q) => !q.id.endsWith('demo') && q.id !== 'demo',
+                ).length
+                const estimatedMinutes = Math.ceil((scoredCount * maxSeconds) / 60)
+
+                if (isSelected) {
+                  return (
+                    <span
+                      className="competency-chip selectable selected"
+                      key={key}
+                      onClick={() => toggle(key)}
+                    >
+                      {comp}
+                      <span className="chip-count">{scoredCount} вопр.</span>
+                    </span>
+                  )
+                }
+
+                if (result) {
+                  return (
+                    <span
+                      className="competency-chip selectable"
+                      key={key}
+                      onClick={() => toggle(key)}
+                      style={{
+                        color: percentToColor(result.percent),
+                        background: percentToBackground(result.percent),
+                      }}
+                    >
+                      {comp}
+                      <span className="chip-score">{result.percent}%</span>
+                      <span className="chip-count">{result.correct}/{result.total}</span>
+                    </span>
+                  )
+                }
+
+                return (
+                  <span
+                    className="competency-chip gray selectable"
+                    key={key}
+                    onClick={() => toggle(key)}
+                  >
+                    {comp}
+                    <span className="chip-count">{scoredCount} вопр. ~{estimatedMinutes} мин</span>
+                  </span>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+      {selected.size > 0 && (
+        <div className="survey-fab">
+          <button
+            type="button"
+            onClick={() => onStart(selectedQuestionIds, Math.max(10, Math.min(180, maxSeconds)))}
+          >
+            <QrCode size={18} style={{ marginRight: 8, verticalAlign: 'middle' }} />
+            Запустить опрос ({selectedQuestionIds.length} вопр. ~{totalTime} мин)
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ActiveSurveyPanel({
+  session,
+  questionSections,
+  onFinish,
+  onRestart,
+}: {
+  session: TestSession
+  questionSections: QuestionSection[]
+  onFinish?: (id: string) => void
+  onRestart?: (id: string, maxSeconds: number) => void
+}) {
+  const [liveSession, setLiveSession] = useState<TestSession | undefined>()
+  const baseSessionRef = useRef(session)
+  useEffect(() => {
+    baseSessionRef.current = session
+  })
+  const current = liveSession ?? session
+  const [maxSeconds, setMaxSeconds] = useState(current.maxSeconds ?? 45)
+  const [qr, setQr] = useState('')
+  const testUrl = `${window.location.origin}${window.location.pathname}#/test/${current.id}`
+
+  useEffect(() => {
+    if (!testUrl) return
+    QRCode.toDataURL(testUrl, { margin: 1, width: 220 }).then(setQr)
+  }, [testUrl])
+
+  useEffect(() => {
+    if (!session.id || !firebaseEnabled) return undefined
+    const sessionId = session.id
+    let stopped = false
+    void readSessionRecord(sessionId).then((record) => {
+      if (!stopped && record) {
+        setLiveSession(mergeSessionPair(baseSessionRef.current ?? record, record))
+      }
+    })
+    const unsubscribe = subscribeRemoteState<unknown>(
+      getSessionRecordPath(sessionId),
+      null,
+      (value) => {
+        const record = normalizeSessions(value ? [value] : [])[0]
+        if (record) {
+          setLiveSession((prev) =>
+            mergeSessionPair(prev ?? baseSessionRef.current ?? record, record),
+          )
+        }
+      },
+    )
+    return () => {
+      stopped = true
+      unsubscribe()
+    }
+  }, [session.id])
+
+  const questions = getSessionQuestions(current, questionSections)
+  const currentQuestion = questions[current.currentIndex]
+  const answeredCount = current.answers.length
+  const totalCount = questions.length
+  const lastAnswer = current.answers.at(-1)
+  const lastAnswerQuestion = lastAnswer
+    ? questions.find((q) => q.id === lastAnswer.questionId)
+    : undefined
+
+  if (canShowResults(current)) {
+    return (
+      <div className="assessment-result">
+        <div className="assessment-actions">
+          <label>
+            Время на вопрос при повторе, секунд
+            <input
+              type="number"
+              min={10}
+              max={180}
+              value={maxSeconds}
+              onChange={(e) => setMaxSeconds(Number(e.target.value))}
+            />
+          </label>
+          <button className="primary" type="button" onClick={() => onRestart?.(current.id, maxSeconds)}>
+            <QrCode size={18} />
+            Пройти заново
+          </button>
+        </div>
+        <ResultsPanel result={calculateResults(current, questionSections)} title="Итоговая оценка HR" />
+        <div className="answer-log full">
+          {current.answers.map((answer, index) => {
+            const question = questions.find((q) => q.id === answer.questionId)
+            return (
+              <article className="answer-item" key={`${answer.questionId}-${index}`}>
+                <div>
+                  <strong>{question?.text}</strong>
+                  <p>{answerText(question, answer.selectedIndex)}</p>
+                </div>
+                <span className={answer.isCorrect ? 'pill ok' : 'pill bad'}>
+                  {answer.isCorrect ? 'Верно' : 'Неверно'}
+                </span>
+              </article>
+            )
+          })}
+          {!current.answers.length && (
+            <p className="muted">Тест был завершен без ответов: {questions.length} вопросов.</p>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="assessment-start">
+      <div className="section-title">
+        <QrCode size={20} />
+        <h2>Опрос сформирован</h2>
+      </div>
+      <div className="live-monitor">
+        <span className="eyebrow">Мониторинг прохождения</span>
+        <strong>
+          Ответил на {answeredCount} из {totalCount} вопросов
+        </strong>
+        <p>
+          {current.status === 'in_progress'
+            ? currentQuestion
+              ? `Текущий вопрос ${current.currentIndex + 1}: ${currentQuestion.text}`
+              : 'Соискатель отвечает на тест'
+            : 'Ожидает старта'}
+        </p>
+        {lastAnswer && (
+          <div className="last-answer">
+            <span>Последний ответ</span>
+            <strong>{answerText(lastAnswerQuestion, lastAnswer.selectedIndex)}</strong>
+            <em className={lastAnswer.isCorrect ? 'ok' : 'bad'}>
+              {lastAnswer.isCorrect ? 'Верно' : 'Неверно'}
+            </em>
+          </div>
+        )}
+      </div>
+      {qr && <img className="qr" src={qr} alt="QR-код для прохождения теста" />}
+      <div className="copy-row">
+        <input readOnly value={testUrl} />
+        <button
+          className="icon-button"
+          type="button"
+          title="Скопировать"
+          onClick={() => navigator.clipboard?.writeText(testUrl)}
+        >
+          <ClipboardCopy size={19} />
+        </button>
+      </div>
+      <dl className="meta-grid">
+        <div>
+          <dt>Статус</dt>
+          <dd>{statusLabel(current.status)}</dd>
+        </div>
+        <div>
+          <dt>Ответы</dt>
+          <dd>{current.answers.length}/{totalCount}</dd>
+        </div>
+      </dl>
+      {(current.status === 'new' || current.status === 'in_progress') && (
+        <button className="danger" type="button" onClick={() => onFinish?.(current.id)}>
+          <StopCircle size={18} />
+          Завершить тестирование
+        </button>
+      )}
+      <div className="answer-log full">
+        {current.answers.map((answer, index) => {
+          const question = questions.find((q) => q.id === answer.questionId)
+          return (
+            <article className="answer-item" key={`${answer.questionId}-${index}`}>
+              <div>
+                <strong>
+                  {index + 1}. {question?.text}
+                </strong>
+                <p>{answerText(question, answer.selectedIndex)}</p>
+              </div>
+              <span className={answer.isCorrect ? 'pill ok' : 'pill bad'}>
+                {answer.isCorrect ? 'Верно' : 'Неверно'}
+              </span>
+            </article>
+          )
+        })}
+        {!current.answers.length && (
+          <p className="muted">Ответы появятся здесь сразу во время прохождения.</p>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -2760,237 +3285,6 @@ function CandidateEditor({
           </button>
         )}
       </div>
-    </div>
-  )
-}
-
-function AssessmentTab({
-  group,
-  assessmentType,
-  questionSections,
-  onEnsureSession,
-  onFinish,
-  onRestart,
-}: {
-  group: CandidateGroup
-  assessmentType: AssessmentType
-  questionSections: QuestionSection[]
-  onEnsureSession?: (
-    group: CandidateGroup,
-    assessmentType: AssessmentType,
-    maxSeconds: number,
-  ) => string | undefined
-  onFinish?: (id: string) => void
-  onRestart?: (id: string, maxSeconds: number) => void
-}) {
-  const baseSession = getSessionByType(group, assessmentType)
-  const [liveSession, setLiveSession] = useState<TestSession | undefined>()
-  const baseSessionRef = useRef(baseSession)
-  const [prevSessionId, setPrevSessionId] = useState(baseSession?.id)
-  if (baseSession?.id !== prevSessionId) {
-    setPrevSessionId(baseSession?.id)
-    setLiveSession(undefined)
-  }
-  useEffect(() => {
-    baseSessionRef.current = baseSession
-  })
-  const session = liveSession ?? baseSession
-  const [maxSeconds, setMaxSeconds] = useState(session?.maxSeconds ?? 45)
-  const [qr, setQr] = useState('')
-  const testUrl = session
-    ? `${window.location.origin}${window.location.pathname}#/test/${session.id}`
-    : ''
-
-  useEffect(() => {
-    if (!testUrl) return
-    QRCode.toDataURL(testUrl, { margin: 1, width: 220 }).then(setQr)
-  }, [testUrl])
-
-  useEffect(() => {
-    if (!baseSession?.id || !firebaseEnabled) return undefined
-    const sessionId = baseSession.id
-    let stopped = false
-    void readSessionRecord(sessionId).then((record) => {
-      if (!stopped && record) {
-        setLiveSession(mergeSessionPair(baseSessionRef.current ?? record, record))
-      }
-    })
-    const unsubscribe = subscribeRemoteState<unknown>(
-      getSessionRecordPath(sessionId),
-      null,
-      (value) => {
-        const record = normalizeSessions(value ? [value] : [])[0]
-        if (record) {
-          setLiveSession((current) =>
-            mergeSessionPair(current ?? baseSessionRef.current ?? record, record),
-          )
-        }
-      },
-    )
-    return () => {
-      stopped = true
-      unsubscribe()
-    }
-  }, [baseSession?.id])
-
-  const startOrUpdate = () => {
-    onEnsureSession?.(group, assessmentType, Math.max(10, Math.min(180, maxSeconds)))
-  }
-
-  const restart = () => {
-    if (!session) return
-    onRestart?.(session.id, Math.max(10, Math.min(180, maxSeconds)))
-  }
-
-  const questions = session ? getQuestionBank(session.assessmentType, questionSections) : []
-  const currentQuestion = session ? questions[session.currentIndex] : undefined
-  const answeredCount = session?.answers.length ?? 0
-  const totalCount = questions.length
-  const lastAnswer = session?.answers.at(-1)
-  const lastAnswerQuestion = lastAnswer
-    ? getQuestion(lastAnswer.questionId, session?.assessmentType, questionSections)
-    : undefined
-
-  if (canShowResults(session)) {
-    return (
-      <div className="assessment-result">
-        <div className="assessment-actions">
-          <label>
-            Время на вопрос при повторе, секунд
-            <input
-              type="number"
-              min={10}
-              max={180}
-              value={maxSeconds}
-              onChange={(event) => setMaxSeconds(Number(event.target.value))}
-            />
-          </label>
-          <button className="primary" type="button" onClick={restart}>
-            <QrCode size={18} />
-            Пройти заново
-          </button>
-        </div>
-        <ResultsPanel result={calculateResults(session!, questionSections)} title="Итоговая оценка HR" />
-        <div className="answer-log full">
-          {session!.answers.map((answer, index) => {
-            const question = getQuestion(answer.questionId, session!.assessmentType, questionSections)
-            return (
-              <article className="answer-item" key={`${answer.questionId}-${index}`}>
-                <div>
-                  <strong>{question?.text}</strong>
-                  <p>{answerText(question, answer.selectedIndex)}</p>
-                </div>
-                <span className={answer.isCorrect ? 'pill ok' : 'pill bad'}>
-                  {answer.isCorrect ? 'Верно' : 'Неверно'}
-                </span>
-              </article>
-            )
-          })}
-          {!session!.answers.length && (
-            <p className="muted">Тест был завершен без ответов: {questions.length} вопросов.</p>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="assessment-start">
-      <div className="section-title">
-        <QrCode size={20} />
-        <h2>Пройти тест</h2>
-      </div>
-      <label>
-        Время на вопрос, секунд
-        <input
-          type="number"
-          min={10}
-          max={180}
-          value={maxSeconds}
-          onChange={(event) => setMaxSeconds(Number(event.target.value))}
-        />
-      </label>
-      <button className="primary" type="button" onClick={startOrUpdate}>
-        <QrCode size={18} />
-        {session ? 'Обновить время' : 'Сформировать QR'}
-      </button>
-      {session && (
-        <>
-          <div className="live-monitor">
-            <span className="eyebrow">Мониторинг прохождения</span>
-            <strong>
-              Ответил на {answeredCount} из {totalCount} вопросов
-            </strong>
-            <p>
-              {session.status === 'in_progress'
-                ? currentQuestion
-                  ? `Текущий вопрос ${session.currentIndex + 1}: ${currentQuestion.text}`
-                  : 'Соискатель отвечает на тест'
-                : 'Соискатель еще не начал тест'}
-            </p>
-            {lastAnswer && (
-              <div className="last-answer">
-                <span>Последний ответ</span>
-                <strong>{answerText(lastAnswerQuestion, lastAnswer.selectedIndex)}</strong>
-                <em className={lastAnswer.isCorrect ? 'ok' : 'bad'}>
-                  {lastAnswer.isCorrect ? 'Верно' : 'Неверно'}
-                </em>
-              </div>
-            )}
-          </div>
-          {qr && <img className="qr" src={qr} alt="QR-код для прохождения теста" />}
-          <div className="copy-row">
-            <input readOnly value={testUrl} />
-            <button
-              className="icon-button"
-              type="button"
-              title="Скопировать"
-              onClick={() => navigator.clipboard?.writeText(testUrl)}
-            >
-              <ClipboardCopy size={19} />
-            </button>
-          </div>
-          <dl className="meta-grid">
-            <div>
-              <dt>Статус</dt>
-              <dd>{statusLabel(session.status)}</dd>
-            </div>
-            <div>
-              <dt>Ответы</dt>
-              <dd>
-                {session.answers.length}/{getQuestionBank(session.assessmentType, questionSections).length}
-              </dd>
-            </div>
-          </dl>
-          {(session.status === 'new' || session.status === 'in_progress') && (
-            <button className="danger" type="button" onClick={() => onFinish?.(session.id)}>
-              <StopCircle size={18} />
-              Завершить тестирование
-            </button>
-          )}
-          <div className="answer-log full">
-            {session.answers.map((answer, index) => {
-              const question = getQuestion(answer.questionId, session.assessmentType, questionSections)
-              return (
-                <article className="answer-item" key={`${answer.questionId}-${index}`}>
-                  <div>
-                    <strong>
-                      {index + 1}. {question?.text}
-                    </strong>
-                    <p>{answerText(question, answer.selectedIndex)}</p>
-                  </div>
-                  <span className={answer.isCorrect ? 'pill ok' : 'pill bad'}>
-                    {answer.isCorrect ? 'Верно' : 'Неверно'}
-                  </span>
-                </article>
-              )
-            })}
-            {!session.answers.length && (
-              <p className="muted">Ответы появятся здесь сразу во время прохождения.</p>
-            )}
-          </div>
-        </>
-      )}
     </div>
   )
 }
@@ -3326,7 +3620,7 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
   const deadlineRef = useRef(0)
   const timeoutSubmittedRef = useRef(false)
 
-  const questions = session ? getQuestionBank(session.assessmentType, questionSections) : []
+  const questions = session ? getSessionQuestions(session, questionSections) : []
   const currentQuestion = session ? questions[session.currentIndex] : undefined
   const finished = session?.status === 'completed'
   const terminated = session?.status === 'terminated'
