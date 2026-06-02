@@ -3121,10 +3121,6 @@ function ActiveSurveyPanel({
 
   return (
     <div className="assessment-start">
-      <div className="section-title">
-        <QrCode size={20} />
-        <h2>Опрос сформирован</h2>
-      </div>
       <div className="live-monitor">
         <span className="eyebrow">Мониторинг прохождения</span>
         <strong>
