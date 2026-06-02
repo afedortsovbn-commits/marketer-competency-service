@@ -2155,6 +2155,11 @@ function HrApp() {
   const restartSession = async (id: string, maxSeconds: number) => {
     const source = sessions.find((session) => session.id === id)
     if (!source) return
+    const terminatedOld: TestSession = {
+      ...source,
+      status: 'terminated',
+      finishedAt: source.finishedAt ?? new Date().toISOString(),
+    }
     const newSession: TestSession = {
       ...source,
       id: createId(),
@@ -2166,8 +2171,14 @@ function HrApp() {
       startedAt: undefined,
       finishedAt: undefined,
     }
-    await saveSessionRecord(newSession)
-    saveSessions([newSession, ...sessions.filter((session) => session.id !== id)])
+    await Promise.all([saveSessionRecord(terminatedOld), saveSessionRecord(newSession)])
+    const latestSessions = getSessions()
+    saveSessions([
+      newSession,
+      ...latestSessions.map((session) =>
+        session.id === id ? terminatedOld : session,
+      ),
+    ])
   }
 
   const logout = () => {
@@ -2778,6 +2789,8 @@ function AssessmentTab({
 }) {
   const baseSession = getSessionByType(group, assessmentType)
   const [liveSession, setLiveSession] = useState<TestSession | undefined>()
+  const baseSessionRef = useRef(baseSession)
+  baseSessionRef.current = baseSession
   const session = liveSession ?? baseSession
   const [maxSeconds, setMaxSeconds] = useState(session?.maxSeconds ?? 45)
   const [qr, setQr] = useState('')
@@ -2791,20 +2804,24 @@ function AssessmentTab({
   }, [testUrl])
 
   useEffect(() => {
+    setLiveSession(undefined)
     if (!baseSession?.id || !firebaseEnabled) return undefined
+    const sessionId = baseSession.id
     let stopped = false
-    void readSessionRecord(baseSession.id).then((record) => {
+    void readSessionRecord(sessionId).then((record) => {
       if (!stopped && record) {
-        setLiveSession(mergeSessionPair(baseSession, record))
+        setLiveSession(mergeSessionPair(baseSessionRef.current ?? record, record))
       }
     })
     const unsubscribe = subscribeRemoteState<unknown>(
-      getSessionRecordPath(baseSession.id),
+      getSessionRecordPath(sessionId),
       null,
       (value) => {
         const record = normalizeSessions(value ? [value] : [])[0]
         if (record) {
-          setLiveSession((current) => mergeSessionPair(current ?? baseSession, record))
+          setLiveSession((current) =>
+            mergeSessionPair(current ?? baseSessionRef.current ?? record, record),
+          )
         }
       },
     )
@@ -2812,7 +2829,7 @@ function AssessmentTab({
       stopped = true
       unsubscribe()
     }
-  }, [baseSession])
+  }, [baseSession?.id])
 
   const startOrUpdate = () => {
     onEnsureSession?.(group, assessmentType, Math.max(10, Math.min(180, maxSeconds)))
