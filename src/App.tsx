@@ -2157,13 +2157,17 @@ function HrApp() {
       id: createId(),
       createdAt: new Date().toISOString(),
       maxSeconds: Math.max(10, Math.min(180, maxSeconds)),
-      status: 'new',
+      status: 'new' as const,
       currentIndex: 0,
       answers: [],
-      startedAt: undefined,
-      finishedAt: undefined,
     }
-    await Promise.all([saveSessionRecord(terminatedOld), saveSessionRecord(newSession)])
+    delete (newSession as Record<string, unknown>).startedAt
+    delete (newSession as Record<string, unknown>).finishedAt
+    const results = await Promise.all([
+      saveSessionRecord(terminatedOld),
+      saveSessionRecord(newSession),
+    ])
+    if (!results[1]) console.error('[restartSession] failed to save new session', newSession.id)
     const latestSessions = getSessions()
     saveSessions([
       newSession,

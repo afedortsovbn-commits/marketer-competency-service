@@ -47,22 +47,14 @@ export const readRemoteState = async <T,>(name: string, fallback: T) => {
   }
 }
 
-const stripUndefined = (value: unknown): unknown => {
-  if (value === undefined) return null
-  if (value === null || typeof value !== 'object') return value
-  if (Array.isArray(value)) return value.map(stripUndefined)
-  const result: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (v !== undefined) result[k] = stripUndefined(v)
-  }
-  return result
-}
+const sanitize = (value: unknown): unknown =>
+  value === undefined ? null : JSON.parse(JSON.stringify(value))
 
 export const saveRemoteState = async (name: string, value: unknown) => {
   const target = remoteRef(name)
   if (!target) return false
   try {
-    await set(target, stripUndefined(value))
+    await set(target, sanitize(value))
     return true
   } catch (error) {
     console.error('[Firebase] write failed:', name, error)
