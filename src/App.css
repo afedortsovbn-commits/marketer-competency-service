@@ -300,6 +300,27 @@ button {
   box-shadow: var(--shadow);
 }
 
+.candidate-card-head-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+}
+
+.candidate-card-head-row .candidate-card-head {
+  flex: 1;
+  min-width: 0;
+}
+
+.confirm-delete-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .candidate-card-head {
   display: block;
   width: 100%;
@@ -686,17 +707,58 @@ button {
   padding: 0;
 }
 
+.segmented-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+
+.segmented-row .segmented {
+  margin-bottom: 0;
+}
+
 .segmented {
-  display: inline-grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: inline-flex;
   gap: 4px;
   padding: 4px;
   margin-bottom: 12px;
   background: var(--soft);
   border-radius: 8px;
+  white-space: nowrap;
+}
+
+.section-name-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.section-name-input-row input {
+  flex: 1;
+}
+
+.competency-group {
+  margin-bottom: 16px;
+}
+
+.competency-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.competency-group-head h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
 }
 
 .segmented button {
+  flex-shrink: 0;
   min-height: 36px;
   padding: 8px 12px;
   color: var(--muted);
@@ -1133,8 +1195,14 @@ details ol {
 
 .competency-chip.selected {
   color: #fff;
-  background: #2563eb;
-  border-color: #1d4ed8;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.chip-details {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
 }
 
 .survey-modal-body {

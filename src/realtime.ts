@@ -1,5 +1,5 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app'
-import { get, getDatabase, onValue, ref, set, type Database } from 'firebase/database'
+import { get, getDatabase, onValue, ref, remove, set, type Database } from 'firebase/database'
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -58,6 +58,18 @@ export const saveRemoteState = async (name: string, value: unknown) => {
     return true
   } catch (error) {
     console.error('[Firebase] write failed:', name, error)
+    return false
+  }
+}
+
+export const deleteRemoteState = async (name: string) => {
+  const target = remoteRef(name)
+  if (!target) return false
+  try {
+    await remove(target)
+    return true
+  } catch (error) {
+    console.error('[Firebase] delete failed:', name, error)
     return false
   }
 }

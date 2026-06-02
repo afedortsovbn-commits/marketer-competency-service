@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import './App.css'
 import {
+  deleteRemoteState,
   firebaseEnabled,
   readRemoteState,
   saveRemoteState,
@@ -2207,6 +2208,18 @@ function HrApp() {
     )
   }
 
+  const deleteCandidate = (candidateId: string) => {
+    const remaining = sessions.filter((s) => (s.candidateId ?? s.id) !== candidateId)
+    const removed = sessions.filter((s) => (s.candidateId ?? s.id) === candidateId)
+    // Сначала очищаем localStorage, чтобы mergeSessions в setSessions не восстановил удалённые
+    writeJson(STORAGE_SESSIONS, remaining)
+    for (const s of removed) {
+      void deleteRemoteState(getSessionRecordPath(s.id))
+    }
+    saveSessions(remaining)
+    if (selectedCandidateId === candidateId) setSelectedCandidateId(null)
+  }
+
   const createCombinedSession = (
     group: CandidateGroup,
     questionIds: string[],
@@ -2409,6 +2422,7 @@ function HrApp() {
         onSelect={setSelectedCandidateId}
         onCreate={createCandidate}
         onUpdate={updateCandidate}
+        onDelete={deleteCandidate}
         onCreateCombinedSession={createCombinedSession}
         onFinish={finishSession}
         onRestart={restartSession}
@@ -2556,6 +2570,7 @@ function CandidateWorkspace({
   onSelect,
   onCreate,
   onUpdate,
+  onDelete,
   onCreateCombinedSession,
   onFinish,
   onRestart,
@@ -2568,6 +2583,7 @@ function CandidateWorkspace({
   onSelect: (id: string | null) => void
   onCreate: (candidate: Candidate, visibleTo: string[]) => void
   onUpdate: (candidateId: string, candidate: Candidate, visibleTo: string[]) => void
+  onDelete: (candidateId: string) => void
   onCreateCombinedSession: (
     group: CandidateGroup,
     questionIds: string[],
@@ -2617,6 +2633,7 @@ function CandidateWorkspace({
             expanded={group.id === selected?.id}
             onToggle={() => onSelect(group.id === selected?.id ? null : group.id)}
             onUpdate={onUpdate}
+            onDelete={onDelete}
             onCreateCombinedSession={onCreateCombinedSession}
             onFinish={onFinish}
             onRestart={onRestart}
@@ -2644,6 +2661,7 @@ function CandidateCard({
   onToggle,
   onCreate,
   onUpdate,
+  onDelete,
   onCreateCombinedSession,
   onFinish,
   onRestart,
@@ -2658,6 +2676,7 @@ function CandidateCard({
   onToggle?: () => void
   onCreate?: (candidate: Candidate, visibleTo: string[]) => void
   onUpdate?: (candidateId: string, candidate: Candidate, visibleTo: string[]) => void
+  onDelete?: (candidateId: string) => void
   onCreateCombinedSession?: (
     group: CandidateGroup,
     questionIds: string[],
@@ -2676,6 +2695,7 @@ function CandidateCard({
   )
   const [error, setError] = useState('')
   const [showSurveyModal, setShowSurveyModal] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const update = (field: keyof Candidate, value: string) =>
     setCandidate((current) => ({ ...current, [field]: value }))
@@ -2715,11 +2735,33 @@ function CandidateCard({
   return (
     <article className={`candidate-card ${expanded ? 'expanded' : ''}`}>
       {mode === 'existing' && group && (
-        <button className="candidate-card-head" type="button" onClick={onToggle}>
-          <span>
-            <strong>{group.candidate.fullName}</strong>
-          </span>
-        </button>
+        <div className="candidate-card-head-row">
+          <button className="candidate-card-head" type="button" onClick={onToggle}>
+            <span>
+              <strong>{group.candidate.fullName}</strong>
+            </span>
+          </button>
+          {onDelete && !confirmDelete && (
+            <button
+              className="icon-button danger-icon"
+              type="button"
+              title="Удалить соискателя"
+              onClick={(e) => {
+                e.stopPropagation()
+                setConfirmDelete(true)
+              }}
+            >
+              <Trash2 size={16} />
+            </button>
+          )}
+          {confirmDelete && (
+            <div className="confirm-delete-row">
+              <span>Удалить?</span>
+              <button className="danger compact" type="button" onClick={() => onDelete(group.id)}>Да</button>
+              <button className="secondary compact" type="button" onClick={() => setConfirmDelete(false)}>Нет</button>
+            </div>
+          )}
+        </div>
       )}
 
       {(expanded || mode === 'new') && (
@@ -2811,6 +2853,7 @@ function TestsOverview({
   questionSections: QuestionSection[]
   onCreateSurvey: () => void
 }) {
+  const [selectedChip, setSelectedChip] = useState<string | null>(null)
   const results = useMemo(
     () => getCompetencyResults(group.sessions, questionSections),
     [group.sessions, questionSections],
@@ -2825,6 +2868,30 @@ function TestsOverview({
     }
     return map
   }, [results])
+
+  const chipDetails = useMemo(() => {
+    if (!selectedChip) return null
+    const [sectionId, ...rest] = selectedChip.split('::')
+    const competency = rest.join('::')
+    const completedSessions = group.sessions
+      .filter((s) => s.status === 'completed' || s.status === 'terminated')
+      .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+    for (const session of completedSessions) {
+      const questions = getScoredSessionQuestions(session, questionSections)
+      const sectionQuestions = questions.filter((q) => {
+        const sec = questionSections.find((s) => s.id === sectionId)
+        return sec?.questions.some((sq) => sq.id === q.id) && q.competency === competency
+      })
+      if (sectionQuestions.length) {
+        const answerMap = new Map(session.answers.map((a) => [a.questionId, a]))
+        return sectionQuestions.map((q) => ({
+          question: q,
+          answer: answerMap.get(q.id),
+        }))
+      }
+    }
+    return null
+  }, [selectedChip, group.sessions, questionSections])
 
   return (
     <div>
@@ -2846,30 +2913,52 @@ function TestsOverview({
           <p>Создайте опрос, чтобы соискатель мог его пройти.</p>
         </div>
       ) : (
-        [...resultsBySection.entries()].map(([sectionId, sectionResults]) => {
-          const sectionLabel = sectionResults[0]?.sectionLabel ?? sectionId
-          return (
-            <div className="competency-section" key={sectionId}>
-              <span className="competency-section-label">{sectionLabel}</span>
-              <div className="competency-chips">
-                {sectionResults.map((r) => (
-                  <span
-                    className="competency-chip"
-                    key={compKeyStr({ sectionId: r.sectionId, competency: r.competency })}
-                    style={{
-                      color: percentToColor(r.percent),
-                      background: percentToBackground(r.percent),
-                    }}
-                  >
-                    {r.competency}
-                    <span className="chip-score">{r.percent}%</span>
-                    <span className="chip-count">{r.correct}/{r.total}</span>
-                  </span>
-                ))}
+        <>
+          {[...resultsBySection.entries()].map(([sectionId, sectionResults]) => {
+            const sectionLabel = sectionResults[0]?.sectionLabel ?? sectionId
+            return (
+              <div className="competency-section" key={sectionId}>
+                <span className="competency-section-label">{sectionLabel}</span>
+                <div className="competency-chips">
+                  {sectionResults.map((r) => {
+                    const key = compKeyStr({ sectionId: r.sectionId, competency: r.competency })
+                    return (
+                      <span
+                        className={`competency-chip selectable${selectedChip === key ? ' selected' : ''}`}
+                        key={key}
+                        onClick={() => setSelectedChip(selectedChip === key ? null : key)}
+                        style={selectedChip === key ? undefined : {
+                          color: '#1a1a1a',
+                          background: percentToBackground(r.percent),
+                          borderColor: percentToColor(r.percent),
+                        }}
+                      >
+                        {r.competency}
+                        <span className="chip-score">{r.percent}%</span>
+                        <span className="chip-count">{r.correct}/{r.total}</span>
+                      </span>
+                    )
+                  })}
+                </div>
               </div>
+            )
+          })}
+          {chipDetails && (
+            <div className="chip-details">
+              {chipDetails.map(({ question, answer }) => (
+                <article className="answer-item" key={question.id}>
+                  <div>
+                    <strong>{question.text}</strong>
+                    <p>{answer ? answerText(question, answer.selectedIndex) : 'Нет ответа'}</p>
+                  </div>
+                  <span className={answer?.isCorrect ? 'pill ok' : 'pill bad'}>
+                    {answer?.isCorrect ? 'Верно' : 'Неверно'}
+                  </span>
+                </article>
+              ))}
             </div>
-          )
-        })
+          )}
+        </>
       )}
     </div>
   )
@@ -3418,7 +3507,7 @@ function QuestionCatalog({
       ),
     })
   }
-  const addQuestion = () => {
+  const addQuestion = (competency?: string) => {
     if (!activeSection) return
     updateSection(activeSection.id, {
       questions: [
@@ -3427,13 +3516,22 @@ function QuestionCatalog({
           text: 'Новый вопрос',
           answers: ['Вариант 1', 'Вариант 2', 'Не знаю'],
           correctIndex: 0,
-          competency: 'Общая компетенция',
+          competency: competency ?? 'Общая компетенция',
           direction: 'general',
           weight: 1,
         }, activeSection.questions.length),
       ],
     })
   }
+  const questionsByCompetency = useMemo(() => {
+    const map = new Map<string, Question[]>()
+    for (const q of questions) {
+      const list = map.get(q.competency) ?? []
+      list.push(q)
+      map.set(q.competency, list)
+    }
+    return map
+  }, [questions])
   const deleteQuestion = (questionId: string) => {
     if (!activeSection) return
     updateSection(activeSection.id, {
@@ -3462,56 +3560,61 @@ function QuestionCatalog({
           <h2>Банк вопросов</h2>
         </div>
       )}
-      <div className="segmented">
-        {sections.map((section) => (
-          <button
-            className={section.id === type ? 'active' : ''}
-            key={section.id}
-            type="button"
-            onClick={() => setType(section.id)}
-          >
-            {section.label}
+      <div className="segmented-row">
+        <div className="segmented">
+          {sections.map((section) => (
+            <button
+              className={section.id === type ? 'active' : ''}
+              key={section.id}
+              type="button"
+              onClick={() => setType(section.id)}
+            >
+              {section.label}
+            </button>
+          ))}
+        </div>
+        {isOwner && (
+          <button className="icon-button" type="button" title="Добавить раздел" onClick={addSection}>
+            <Plus size={18} />
           </button>
-        ))}
+        )}
       </div>
       {isOwner && activeSection && (
         <div className="question-admin">
-          <label>
+          <label className="section-name-row">
             Название раздела
-            <input
-              value={activeSection.label}
-              onChange={(event) => updateSection(activeSection.id, { label: event.target.value })}
-            />
+            <div className="section-name-input-row">
+              <input
+                value={activeSection.label}
+                onChange={(event) => updateSection(activeSection.id, { label: event.target.value })}
+              />
+              {sections.length > 1 && (
+                <button className="icon-button danger-icon" type="button" title="Удалить раздел" onClick={() => deleteSection(activeSection.id)}>
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
           </label>
-          <div className="form-actions">
-            <button className="primary compact" type="button" onClick={addSection}>
-              <Plus size={16} />
-              Добавить раздел
-            </button>
-            {sections.length > 1 && (
-              <button className="danger compact" type="button" onClick={() => deleteSection(activeSection.id)}>
-                <Trash2 size={16} />
-                Удалить раздел
-              </button>
-            )}
-          </div>
         </div>
       )}
       <p className="muted">
         {questions.length} вопросов. Вес вопроса влияет на итоговую оценку компетенции, по умолчанию 1.
       </p>
-      {isOwner && (
-        <button className="primary compact" type="button" onClick={addQuestion}>
-          <Plus size={16} />
-          Добавить вопрос
-        </button>
-      )}
       <div className="question-list">
-        {questions.map((question, index) => (
+        {[...questionsByCompetency.entries()].map(([competency, compQuestions]) => (
+          <div className="competency-group" key={competency}>
+            <div className="competency-group-head">
+              <h3>{competency}</h3>
+              {isOwner && (
+                <button className="icon-button" type="button" title="Добавить вопрос" onClick={() => addQuestion(competency)}>
+                  <Plus size={16} />
+                </button>
+              )}
+            </div>
+            {compQuestions.map((question, index) => (
           <details key={question.id}>
             <summary>
               <span>{index + 1}. {question.text}</span>
-              <small>{question.competency}</small>
             </summary>
             {isOwner ? (
               <div className="question-editor">
@@ -3601,6 +3704,8 @@ function QuestionCatalog({
               </ol>
             )}
           </details>
+            ))}
+          </div>
         ))}
       </div>
     </section>
