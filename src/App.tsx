@@ -2790,7 +2790,14 @@ function AssessmentTab({
   const baseSession = getSessionByType(group, assessmentType)
   const [liveSession, setLiveSession] = useState<TestSession | undefined>()
   const baseSessionRef = useRef(baseSession)
-  baseSessionRef.current = baseSession
+  const [prevSessionId, setPrevSessionId] = useState(baseSession?.id)
+  if (baseSession?.id !== prevSessionId) {
+    setPrevSessionId(baseSession?.id)
+    setLiveSession(undefined)
+  }
+  useEffect(() => {
+    baseSessionRef.current = baseSession
+  })
   const session = liveSession ?? baseSession
   const [maxSeconds, setMaxSeconds] = useState(session?.maxSeconds ?? 45)
   const [qr, setQr] = useState('')
@@ -2804,7 +2811,6 @@ function AssessmentTab({
   }, [testUrl])
 
   useEffect(() => {
-    setLiveSession(undefined)
     if (!baseSession?.id || !firebaseEnabled) return undefined
     const sessionId = baseSession.id
     let stopped = false

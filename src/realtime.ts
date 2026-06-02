@@ -65,7 +65,13 @@ export const subscribeRemoteState = <T,>(
 ) => {
   const target = remoteRef(name)
   if (!target) return () => undefined
-  return onValue(target, (snapshot) => {
-    onChange((snapshot.val() ?? fallback) as T)
-  })
+  return onValue(
+    target,
+    (snapshot) => {
+      onChange((snapshot.val() ?? fallback) as T)
+    },
+    () => {
+      onChange(fallback)
+    },
+  )
 }
