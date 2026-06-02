@@ -3139,6 +3139,8 @@ function ActiveSurveyPanel({
         </p>
         {lastAnswer && (
           <div className="last-answer">
+            <span>Последний вопрос</span>
+            <strong>{lastAnswerQuestion?.text}</strong>
             <span>Последний ответ</span>
             <strong>{answerText(lastAnswerQuestion, lastAnswer.selectedIndex)}</strong>
             <em className={lastAnswer.isCorrect ? 'ok' : 'bad'}>
@@ -3147,18 +3149,20 @@ function ActiveSurveyPanel({
           </div>
         )}
       </div>
-      {qr && <img className="qr" src={qr} alt="QR-код для прохождения теста" />}
-      <div className="copy-row">
-        <input readOnly value={testUrl} />
-        <button
-          className="icon-button"
-          type="button"
-          title="Скопировать"
-          onClick={() => navigator.clipboard?.writeText(testUrl)}
-        >
-          <ClipboardCopy size={19} />
-        </button>
-      </div>
+      {current.status !== 'in_progress' && qr && <img className="qr" src={qr} alt="QR-код для прохождения теста" />}
+      {current.status !== 'in_progress' && (
+        <div className="copy-row">
+          <input readOnly value={testUrl} />
+          <button
+            className="icon-button"
+            type="button"
+            title="Скопировать"
+            onClick={() => navigator.clipboard?.writeText(testUrl)}
+          >
+            <ClipboardCopy size={19} />
+          </button>
+        </div>
+      )}
       <dl className="meta-grid">
         <div>
           <dt>Статус</dt>
@@ -3767,7 +3771,6 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
     return (
       <main className="candidate-shell centered">
         <span className="eyebrow">Оценка компетенций: {getAssessmentLabel(session.assessmentType, questionSections)}</span>
-        <h1>{session.candidate.fullName}</h1>
         <p>Ответ выбирается одним касанием. Первый вопрос тестовый и нужен только для знакомства с интерфейсом.</p>
         <button className="primary wide" type="button" onClick={start}>
           Начать
