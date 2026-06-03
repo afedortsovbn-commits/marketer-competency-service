@@ -4,16 +4,17 @@
 SPA-сервис для HR-тестирования соискателей. HR создаёт анкету, генерирует QR-код, соискатель сканирует и отвечает на вопросы. HR видит ход тестирования в реальном времени.
 
 ## Стек
-- **Frontend:** React 19 + TypeScript, Vite 8, single-file SPA (`src/App.tsx` ~4100 строк)
+- **Frontend:** React 19 + TypeScript, Vite 8
 - **Backend/DB:** Firebase Realtime Database (без Auth — анонимный доступ)
 - **Деплой:** GitHub Pages через GitHub Actions (`.github/workflows/pages.yml`)
 - **Роутинг:** Hash-based (`#/test/{sessionId}` для кандидата, без хеша — HR-кабинет)
 
 ## Структура файлов
 ```
-src/App.tsx        — ВСЁ приложение: типы, данные вопросов, хуки, компоненты
+src/App.tsx        — Приложение: типы, хуки, компоненты (~2100 строк)
 src/App.css        — стили
-src/realtime.ts    — Firebase: init, read, write, subscribe
+src/questions.ts   — Банк вопросов: 230 вопросов, 4 раздела, 23 компетенции
+src/realtime.ts    — Firebase: init, read, write, subscribe, delete
 src/main.tsx       — точка входа React
 app.html           — HTML-шаблон (Vite input)
 vite.config.ts     — base: '/marketer-competency-service/'
@@ -34,7 +35,7 @@ scripts/sync-pages-root.mjs — копирует dist/app.html → dist/index.ht
 ### Ключевые типы
 - `TestSession` — сессия тестирования (id, candidate, answers, status, questionIds?, etc.)
 - `CandidateGroup` — группировка сессий по candidateId
-- `QuestionSection` — раздел вопросов (marketer, analyst, skills)
+- `QuestionSection` — раздел вопросов (marketer, analyst, softskills, thinking)
 - `CompetencyKey` — `{sectionId, competency}` для идентификации компетенции внутри раздела
 - `CompetencyResult` — результат по одной компетенции (correct, total, percent)
 
@@ -42,68 +43,91 @@ scripts/sync-pages-root.mjs — копирует dist/app.html → dist/index.ht
 `new` → `in_progress` → `completed` / `terminated`
 
 ### Типы сессий
-- **Старые сессии** (без `questionIds`): привязаны к `assessmentType` ('marketer', 'analyst', 'skills'), содержат ВСЕ вопросы раздела. Используются только для отображения результатов.
-- **Комбинированные сессии** (с `questionIds`): `assessmentType: 'combined'`, содержат конкретные вопросы из выбранных компетенций. Создаются через модалку «Создать опрос». Только такие сессии показывают ActiveSurveyPanel с QR-кодом.
+- **Старые сессии** (без `questionIds`): привязаны к `assessmentType`, содержат ВСЕ вопросы раздела. Только для отображения результатов.
+- **Комбинированные сессии** (с `questionIds`): `assessmentType: 'combined'`, конкретные вопросы из выбранных компетенций. Создаются через «Создать опрос». Только они показывают ActiveSurveyPanel с QR.
+
+## Банк вопросов (`src/questions.ts`)
+
+### 4 раздела, 23 компетенции, по 10 вопросов:
+- **Маркетолог** (90): Стратегия, Performance, SEO, SMM, Контент, CRM, Бренд, Исследования, Продуктовый маркетинг
+- **Аналитик** (50): SQL и данные, Статистика, Продуктовая аналитика, BI и визуализация, A/B тесты
+- **Софтскилы** (50): Стрессоустойчивость, Субординация, Дипломатичность, Самоотдача, Управляемость
+- **Мышление** (40): IQ и логика, Глубина мышления, Внимательность, Глубина проработки
+
+### Миграция вопросов
+Вопросы кэшируются в localStorage и Firebase. При обновлении банка нужно:
+1. Изменить `QUESTIONS_VERSION` в App.tsx (например `'v5-description'`)
+2. Миграция `migrateQuestionsIfNeeded()` автоматически перезапишет кэш при загрузке
+
+**Правило:** Если изменил `questions.ts`, ОБЯЗАТЕЛЬНО обнови `QUESTIONS_VERSION`, иначе пользователи увидят старые вопросы.
 
 ## Критические моменты (подводные камни)
 
 ### 1. Firebase НЕ принимает undefined
-**Самый важный баг, который мы чинили.** Firebase Realtime Database выбрасывает ошибку при записи объектов с `undefined`-значениями. Функция `mergeSessionPair` создавала `finishedAt: undefined` для сессий в статусе in_progress. Ошибка ловилась try/catch молча — запись пропадала без следа.
+Firebase выбрасывает ошибку при записи `undefined`. `saveRemoteState` прогоняет данные через `JSON.parse(JSON.stringify(value))`.
 
-**Решение:** `saveRemoteState` прогоняет данные через `JSON.parse(JSON.stringify(value))` перед записью. Это убирает все undefined, NaN, функции.
+**Правило:** Никогда не присваивать `undefined` полям объектов для Firebase. Использовать `delete` или не включать поле.
 
-**Правило:** Никогда не присваивать `undefined` полям объектов, которые пойдут в Firebase. Использовать `delete` или просто не включать поле.
+### 2. Удаление данных — mergeSessions восстанавливает удалённое
+`setSessions` вызывает `mergeSessions(localSessions, ...)` — мерж с localStorage. Если удалить сессию через `saveSessions(filtered)`, мерж вернёт удалённые из localStorage.
 
-### 2. Массовая перезапись сессий
-Ранее `setSessions` писал КАЖДУЮ сессию в `sessionsById/{id}` индивидуально. С 20+ сессиями это вызывало 20+ callback'ов от `onValue` подписки → 20+ setState → каскадный ре-рендер → браузер зависал.
+**Решение:** Перед `saveSessions` записать отфильтрованные данные напрямую в localStorage через `writeJson(STORAGE_SESSIONS, remaining)`. См. `deleteCandidate`.
 
-**Решение:** `setSessions` пишет только в `sessions` (массив). Индивидуальные записи в `sessionsById` делаются через `saveSessionRecord` только там, где сессия реально меняется.
+**Правило:** При удалении данных ВСЕГДА сначала очищать localStorage, потом вызывать save.
 
-### 3. useEffect зависимости
-`AssessmentTab` подписка на Firebase зависела от `[baseSession]` (объект). Новый объект при каждом ре-рендере → подписка пересоздавалась. Заменено на `[baseSession?.id]` + `useRef` для значения.
+### 3. Массовая перезапись сессий
+`setSessions` пишет только в `sessions` (массив). Индивидуальные `sessionsById/{id}` через `saveSessionRecord`.
 
-### 4. subscribeRemoteState без error callback
-Firebase `onValue` без error callback молча теряет ошибки permission denied. Добавлен error callback, который вызывает `onChange(fallback)`.
+### 4. useEffect зависимости
+НЕ ставить объекты в deps. Использовать `[obj?.id]` + `useRef` для значения. Иначе бесконечные подписки.
 
-### 5. Каскадные ре-рендеры при обновлении сессий
-`useStoredSessions` подписывается на Firebase и периодически синхронизирует localStorage. Каждая синхронизация создавала новый массив через `normalizeSessions` → React перерисовывал всё дерево → с 20+ сессиями браузер зависал.
+### 5. Каскадные ре-рендеры
+`sessionsDigest` + `stableSet` в `useStoredSessions` предотвращают лишние обновления.
 
-**Решение:** `sessionsDigest` — строка-хеш из id, статусов и количества ответов всех сессий. `stableSet` сравнивает дайджест перед вызовом `setLocalSessions` и пропускает обновление, если данные по сути не изменились. Интервал sync увеличен с 900мс до 2000мс.
+**Правило:** Использовать `stableSet` вместо `setLocalSessions` (кроме `save`).
 
-**Правило:** При любых изменениях в `useStoredSessions` убедиться, что `stableSet` используется вместо прямого `setLocalSessions` (кроме `save`, где дайджест обновляется вручную).
+### 6. GitHub Pages — источник деплоя
+Pages ДОЛЖЕН быть настроен на **GitHub Actions** (не «Deploy from a branch»). Проверить: Settings → Pages → Source = "GitHub Actions". Иначе деплоятся сырые файлы из репо, а не сборка.
+
+### 7. Кэш браузера после деплоя
+GitHub Pages агрессивно кэширует. Пользователям может потребоваться Ctrl+Shift+R или очистка кэша. На мобильных — открыть в инкогнито или очистить кэш браузера.
 
 ## Потоки данных
 
 ### HR создаёт соискателя
-`createCandidate` → `createSessionDraft()` (placeholder-сессия с assessmentType 'marketer', без questionIds) → `saveSessionRecord()` → соискатель появляется в списке с вкладкой «Тесты» (пустые результаты)
+`createCandidate` → `createSessionDraft()` → `saveSessionRecord()` → в списке
+
+### HR удаляет соискателя
+`deleteCandidate` → `writeJson(STORAGE_SESSIONS, remaining)` → `deleteRemoteState` для каждой сессии → `saveSessions(remaining)`
 
 ### HR создаёт комбинированный опрос
-Кнопка «+ Создать опрос» → `CreateSurveyModal` → HR выбирает компетенции (чипы) → «Запустить опрос» → `createCombinedSession(group, questionIds, maxSeconds)` → сессия с `assessmentType: 'combined'` и `questionIds` → `ActiveSurveyPanel` показывает QR-код и мониторинг
+«Создать опрос» → `CreateSurveyModal` (выбор компетенций) → `createCombinedSession` → ActiveSurveyPanel с QR
 
 ### Кандидат проходит тест
-URL: `#/test/{sessionId}` → `CandidateApp` → `getSessionQuestions(session, sections)` (если есть `questionIds` — берёт конкретные вопросы, иначе — все из раздела) → кандидат отвечает → `saveSessionRecord(updated)` пишет в Firebase
-
-### HR видит прогресс
-`ActiveSurveyPanel` → `subscribeRemoteState(sessionsById/{id})` → `setLiveSession` → UI обновляется в реальном времени
+`#/test/{sessionId}` → `CandidateApp` → отвечает → `saveSessionRecord` → Firebase → HR видит в реальном времени
 
 ### HR видит результаты
-`TestsOverview` → `getCompetencyResults(group.sessions, sections)` → чипы компетенций с цветом от зеленого (100%) до красного (0%), сгруппированные по разделам
+`TestsOverview` → чипы компетенций (чёрный текст, цветная граница). Клик по чипу → показывает вопросы и ответы кандидата.
 
-### Повторное тестирование
-`restartSession` → старая сессия `terminated` → новая сессия с новым `id` → `saveSessionRecord` для обеих → QR обновляется
+### Мониторинг прохождения (ActiveSurveyPanel)
+- QR-код и ссылка скрываются после начала прохождения (status `in_progress`)
+- Показываются: последний вопрос + последний ответ
+- Экран кандидата НЕ показывает имя перед стартом
 
 ## Компоненты (ключевые)
-
-- **HrApp** — корневой HR-компонент, управляет сессиями, пользователями, вопросами
-- **CandidateCard** — карточка соискателя с табами «Тесты» / «Профиль»
-- **TestsOverview** — вкладка Тесты: чипы результатов по компетенциям, кнопка «Создать опрос»
-- **CreateSurveyModal** — модалка выбора компетенций для нового опроса
-- **ActiveSurveyPanel** — QR-код и мониторинг активного опроса (только для сессий с `questionIds`)
+- **HrApp** — корневой HR-компонент
+- **CandidateWorkspace** — список соискателей + карточки
+- **CandidateCard** — карточка с табами «Тесты» / «Профиль», кнопка удаления с инлайн-подтверждением
+- **TestsOverview** — результаты: чипы компетенций, клик по чипу → Q&A
+- **CreateSurveyModal** — выбор компетенций для опроса
+- **ActiveSurveyPanel** — QR + мониторинг активного опроса
 - **CandidateApp** — экран кандидата (прохождение теста)
-- **QuestionCatalog** — редактор банка вопросов (модалка)
+- **QuestionCatalog** — редактор банка вопросов (модалка, группировка по компетенциям, нумерация внутри)
 
 ## Цветовая схема
 Корпоративный зеленый: `--accent: #1b8d4b`, `--accent-2: #2f9d41`. НЕ менять на синий/голубой.
+Чипы результатов: чёрный текст `#1a1a1a`, цветная граница `percentToColor()`, фон `percentToBackground()`.
+Выбранный чип: зелёный (accent), не синий.
 
 ## Команды
 ```bash
@@ -112,11 +136,18 @@ npm run build    # tsc + vite build + sync-pages-root
 npm run lint     # eslint
 ```
 
+## URLs
+- **Локалка:** `http://localhost:5173/marketer-competency-service/app.html`
+- **Прод:** `https://afedortsovbn-commits.github.io/marketer-competency-service/`
+
 ## GitHub Actions
 Push в main → lint → build → deploy на GitHub Pages. Если lint падает — деплой не происходит.
 
 ## Аккаунты
-Первый зарегистрированный пользователь = owner (админ). Owner может создавать других HR-пользователей. Пароли хранятся в Firebase в открытом виде (без хеширования).
+Первый зарегистрированный = owner (админ). Owner создаёт HR-пользователей. Пароли в Firebase в открытом виде.
 
 ## Версии и откат
-- **Тег `v2.0-competency-ui`** — текущая стабильная версия с компетенциями и зеленой схемой. Откат: `git reset --hard v2.0-competency-ui`
+- **`v4.0-questions-overhaul`** — текущая: 230 вопросов, 4 раздела, удаление соискателей, клик по чипам
+- **`v3.2-delete-chips-catalog`** — удаление, чипы, каталог по компетенциям (старые вопросы)
+- **`v3.1-survey-ux`** — UX-правки мониторинга
+- Откат: `git reset --hard <тег>`
