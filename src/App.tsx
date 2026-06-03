@@ -426,6 +426,7 @@ type CompetencyResult = {
   competency: string
   correct: number
   total: number
+  answered: number
   percent: number
 }
 
@@ -454,6 +455,7 @@ const getCompetencyResults = (
         const key = `${section.id}::${competency}`
         const existing = resultMap.get(key)
         const correct = qs.filter((q) => answerMap.get(q.id)?.isCorrect).length
+        const answered = qs.filter((q) => answerMap.has(q.id)).length
         const total = qs.length
         if (!existing || session.createdAt > (existing as { _createdAt?: string })._createdAt!) {
           resultMap.set(key, {
@@ -462,7 +464,8 @@ const getCompetencyResults = (
             competency,
             correct,
             total,
-            percent: total ? Math.round((correct / total) * 100) : 0,
+            answered,
+            percent: answered ? Math.round((correct / answered) * 100) : 0,
             _createdAt: session.createdAt,
           } as CompetencyResult & { _createdAt: string })
         }
@@ -472,19 +475,25 @@ const getCompetencyResults = (
   return [...resultMap.values()]
 }
 
-const percentToColor = (percent: number) => {
-  const r = Math.round(220 - (percent / 100) * 180)
-  const g = Math.round(60 + (percent / 100) * 140)
-  const b = Math.round(40 + (percent / 100) * 20)
-  return `rgb(${r}, ${g}, ${b})`
+const lerpColor = (stops: [number, number, number][], percent: number) => {
+  const t = Math.max(0, Math.min(100, percent)) / 100
+  const segCount = stops.length - 1
+  const seg = Math.min(Math.floor(t * segCount), segCount - 1)
+  const local = t * segCount - seg
+  const [r1, g1, b1] = stops[seg]
+  const [r2, g2, b2] = stops[seg + 1]
+  return `rgb(${Math.round(r1 + (r2 - r1) * local)}, ${Math.round(g1 + (g2 - g1) * local)}, ${Math.round(b1 + (b2 - b1) * local)})`
 }
 
-const percentToBackground = (percent: number) => {
-  const r = Math.round(254 - (percent / 100) * 34)
-  const g = Math.round(228 + (percent / 100) * 22)
-  const b = Math.round(226 - (percent / 100) * (226 - 230))
-  return `rgb(${r}, ${g}, ${b})`
-}
+const BG_STOPS: [number, number, number][] = [
+  [254, 226, 224],
+  [254, 238, 218],
+  [253, 248, 216],
+  [230, 248, 220],
+  [218, 246, 228],
+]
+
+const percentToBackground = (percent: number) => lerpColor(BG_STOPS, percent)
 
 const sessionsDigest = (sessions: TestSession[]) =>
   sessions.map((s) => `${s.id}:${s.status}:${s.currentIndex}:${s.answers.length}`).join('|')
@@ -667,13 +676,16 @@ function calculateResults(session: TestSession, sections = getQuestionSections()
     question,
     answer: answerMap.get(question.id),
   }))
-  const totalWeight = scoredQuestions.reduce((sum, question) => sum + (question.weight ?? 1), 0)
+  const answeredWeight = scoredAnswers.reduce(
+    (sum, item) => sum + (item.answer ? (item.question.weight ?? 1) : 0),
+    0,
+  )
   const correctWeight = scoredAnswers.reduce(
     (sum, item) => sum + (item.answer?.isCorrect ? (item.question.weight ?? 1) : 0),
     0,
   )
   const correct = scoredAnswers.filter((item) => item.answer?.isCorrect).length
-  const percent = totalWeight ? Math.round((correctWeight / totalWeight) * 100) : 0
+  const percent = answeredWeight ? Math.round((correctWeight / answeredWeight) * 100) : 0
   const seniorCorrect = scoredAnswers.filter(
     (item) => item.question.level === 'senior' && item.answer?.isCorrect,
   ).length
@@ -753,17 +765,18 @@ function buildBlocks<T extends string>(
 ): ResultBlock[] {
   return keys.map((key) => {
     const questions = sourceQuestions.filter((question) => picker(question) === key)
+    const answeredQuestions = questions.filter((question) => answerMap.has(question.id))
     const correctWeight = questions.reduce(
       (sum, question) => sum + (answerMap.get(question.id)?.isCorrect ? (question.weight ?? 1) : 0),
       0,
     )
-    const totalWeight = questions.reduce((sum, question) => sum + (question.weight ?? 1), 0)
+    const answeredWeight = answeredQuestions.reduce((sum, question) => sum + (question.weight ?? 1), 0)
     const correct = questions.filter((question) => answerMap.get(question.id)?.isCorrect).length
     return {
       title: labels?.[key] ?? key,
       total: questions.length,
       correct,
-      percent: totalWeight ? Math.round((correctWeight / totalWeight) * 100) : 0,
+      percent: answeredWeight ? Math.round((correctWeight / answeredWeight) * 100) : 0,
     }
   })
 }
@@ -1434,7 +1447,7 @@ function CandidateCard({
               type="button"
               onClick={() => setActiveTab('tests')}
             >
-              Тесты
+              Опросы
             </button>
             <button
               className={activeTab === 'profile' ? 'active' : ''}
@@ -1586,12 +1599,11 @@ function TestsOverview({
                         style={selectedChip === key ? undefined : {
                           color: '#1a1a1a',
                           background: percentToBackground(r.percent),
-                          borderColor: percentToColor(r.percent),
                         }}
                       >
                         {r.competency}
                         <span className="chip-score">{r.percent}%</span>
-                        <span className="chip-count">{r.correct}/{r.total}</span>
+                        <span className="chip-count">{r.answered}/{r.total}</span>
                       </span>
                     )
                   })}
@@ -1718,7 +1730,7 @@ function CreateSurveyModal({
                       key={key}
                       onClick={() => toggle(key)}
                       style={{
-                        color: percentToColor(result.percent),
+                        color: '#1a1a1a',
                         background: percentToBackground(result.percent),
                       }}
                     >
@@ -1736,7 +1748,7 @@ function CreateSurveyModal({
                     onClick={() => toggle(key)}
                   >
                     {comp}
-                    <span className="chip-count">{scoredCount} вопр. ~{estimatedMinutes} мин</span>
+                    <span className="chip-count">{scoredCount} вопр. max {estimatedMinutes} мин</span>
                   </span>
                 )
               })}
@@ -1751,7 +1763,7 @@ function CreateSurveyModal({
             onClick={() => onStart(selectedQuestionIds, Math.max(10, Math.min(180, maxSeconds)))}
           >
             <QrCode size={18} style={{ marginRight: 8, verticalAlign: 'middle' }} />
-            Запустить опрос ({selectedQuestionIds.length} вопр. ~{totalTime} мин)
+            Запустить опрос ({selectedQuestionIds.length} вопр. max {totalTime} мин)
           </button>
         </div>
       )}
@@ -1868,9 +1880,9 @@ function ActiveSurveyPanel({
     <div className="assessment-start">
       <div className="live-monitor">
         <span className="eyebrow">Мониторинг прохождения</span>
-        <strong>
+        <span>
           Ответил на {answeredCount} из {totalCount} вопросов
-        </strong>
+        </span>
         <p>
           {current.status === 'in_progress'
             ? currentQuestion
@@ -1881,9 +1893,9 @@ function ActiveSurveyPanel({
         {lastAnswer && (
           <div className="last-answer">
             <span>Последний вопрос</span>
-            <strong>{lastAnswerQuestion?.text}</strong>
+            <span>{lastAnswerQuestion?.text}</span>
             <span>Последний ответ</span>
-            <strong>{answerText(lastAnswerQuestion, lastAnswer.selectedIndex)}</strong>
+            <span>{answerText(lastAnswerQuestion, lastAnswer.selectedIndex)}</span>
             <em className={lastAnswer.isCorrect ? 'ok' : 'bad'}>
               {lastAnswer.isCorrect ? 'Верно' : 'Неверно'}
             </em>
@@ -1941,6 +1953,55 @@ function ActiveSurveyPanel({
           <p className="muted">Ответы появятся здесь сразу во время прохождения.</p>
         )}
       </div>
+    </div>
+  )
+}
+
+function VisibilityDropdown({
+  users,
+  activeLogin,
+  visibleTo,
+  onToggle,
+}: {
+  users: UserAccount[]
+  activeLogin: string | null
+  visibleTo: string[]
+  onToggle: (login: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const selectedCount = visibleTo.length
+
+  useEffect(() => {
+    if (!open) return undefined
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+
+  return (
+    <div className="visibility-dropdown" ref={ref}>
+      <button className="visibility-trigger" type="button" onClick={() => setOpen((v) => !v)}>
+        <span>Кому виден: {selectedCount} акк.</span>
+        <ChevronDown size={16} />
+      </button>
+      {open && (
+        <div className="visibility-dropdown-menu">
+          {users.map((user) => (
+            <label className="check-row" key={user.login}>
+              <input
+                type="checkbox"
+                checked={visibleTo.includes(user.login) || user.login === activeLogin}
+                disabled={user.login === activeLogin}
+                onChange={() => onToggle(user.login)}
+              />
+              {user.login}
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -2003,22 +2064,12 @@ function CandidateEditor({
           onChange={(event) => onChange('note', event.target.value)}
         />
       </label>
-      <div className="visibility-box">
-        <span>Кому виден соискатель</span>
-        <div className="checkbox-list">
-          {users.map((user) => (
-            <label className="check-row" key={user.login}>
-              <input
-                type="checkbox"
-                checked={visibleTo.includes(user.login) || user.login === activeLogin}
-                disabled={user.login === activeLogin}
-                onChange={() => onToggleVisibility(user.login)}
-              />
-              {user.login}
-            </label>
-          ))}
-        </div>
-      </div>
+      <VisibilityDropdown
+        users={users}
+        activeLogin={activeLogin}
+        visibleTo={visibleTo}
+        onToggle={onToggleVisibility}
+      />
       {error && <p className="error-text">{error}</p>}
       <div className="form-actions">
         <button className="primary" type="button" onClick={onSave}>
@@ -2122,6 +2173,12 @@ function QuestionCatalog({
   onSave?: (sections: QuestionSection[]) => void
 }) {
   const [type, setType] = useState<AssessmentType>(sections[0]?.id ?? 'marketer')
+  const [openQuestionId, setOpenQuestionId] = useState<string | null>(null)
+  const [draggedId, setDraggedId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+  const [newCompetencyName, setNewCompetencyName] = useState('')
+  const [showAddCompetency, setShowAddCompetency] = useState(false)
+  const longPressRef = useRef<{ timer: number; id: string } | null>(null)
   const activeSection = sections.find((section) => section.id === type) ?? sections[0]
   const questions = activeSection?.questions ?? []
   const saveSections = (nextSections: QuestionSection[]) => onSave?.(normalizeQuestionSections(nextSections))
@@ -2142,8 +2199,8 @@ function QuestionCatalog({
             text: 'Тестовый вопрос: выберите правильный вариант ответа.',
             answers: ['Неправильный', 'Правильный', 'Неправильный', 'Не знаю'],
             correctIndex: 1,
-            competency: 'Софтскилы',
-            direction: 'soft',
+            competency: 'Общая компетенция',
+            direction: id,
           }, 0),
         ],
       },
@@ -2163,21 +2220,27 @@ function QuestionCatalog({
       ),
     })
   }
-  const addQuestion = (competency?: string) => {
+  const addQuestion = (competency: string, direction: string) => {
     if (!activeSection) return
+    const newQ = normalizeQuestion({
+      text: 'Новый вопрос',
+      answers: ['Вариант 1', 'Вариант 2', 'Не знаю'],
+      correctIndex: 0,
+      competency,
+      direction,
+      weight: 1,
+    }, activeSection.questions.length)
     updateSection(activeSection.id, {
-      questions: [
-        ...activeSection.questions,
-        normalizeQuestion({
-          text: 'Новый вопрос',
-          answers: ['Вариант 1', 'Вариант 2', 'Не знаю'],
-          correctIndex: 0,
-          competency: competency ?? 'Общая компетенция',
-          direction: 'general',
-          weight: 1,
-        }, activeSection.questions.length),
-      ],
+      questions: [...activeSection.questions, newQ],
     })
+    setOpenQuestionId(newQ.id)
+  }
+  const addCompetency = () => {
+    const name = newCompetencyName.trim()
+    if (!name || !activeSection) return
+    addQuestion(name, activeSection.id)
+    setNewCompetencyName('')
+    setShowAddCompetency(false)
   }
   const questionsByCompetency = useMemo(() => {
     const map = new Map<string, Question[]>()
@@ -2193,6 +2256,7 @@ function QuestionCatalog({
     updateSection(activeSection.id, {
       questions: activeSection.questions.filter((question) => question.id !== questionId),
     })
+    if (openQuestionId === questionId) setOpenQuestionId(null)
   }
   const updateAnswer = (question: Question, answerIndex: number, value: string) => {
     const answers = question.answers.map((answer, index) => (index === answerIndex ? value : answer))
@@ -2207,6 +2271,50 @@ function QuestionCatalog({
       answers,
       correctIndex: Math.min(question.correctIndex, Math.max(answers.length - 1, 0)),
     })
+  }
+  const reorderQuestion = (fromId: string, toId: string) => {
+    if (!activeSection || fromId === toId) return
+    const qs = [...activeSection.questions]
+    const fromIdx = qs.findIndex((q) => q.id === fromId)
+    const toIdx = qs.findIndex((q) => q.id === toId)
+    if (fromIdx < 0 || toIdx < 0) return
+    const [moved] = qs.splice(fromIdx, 1)
+    qs.splice(toIdx, 0, moved)
+    updateSection(activeSection.id, { questions: qs })
+  }
+  const handleDragStart = (id: string) => setDraggedId(id)
+  const handleDragOver = (e: React.DragEvent, id: string) => {
+    e.preventDefault()
+    setDragOverId(id)
+  }
+  const handleDrop = (id: string) => {
+    if (draggedId) reorderQuestion(draggedId, id)
+    setDraggedId(null)
+    setDragOverId(null)
+  }
+  const handleDragEnd = () => { setDraggedId(null); setDragOverId(null) }
+  const handleTouchStart = (id: string) => {
+    longPressRef.current = {
+      timer: window.setTimeout(() => { setDraggedId(id) }, 500),
+      id,
+    }
+  }
+  const handleTouchEnd = (targetId: string) => {
+    if (longPressRef.current) {
+      window.clearTimeout(longPressRef.current.timer)
+      longPressRef.current = null
+    }
+    if (draggedId && draggedId !== targetId) {
+      reorderQuestion(draggedId, targetId)
+    }
+    setDraggedId(null)
+    setDragOverId(null)
+  }
+  const handleTouchMove = () => {
+    if (longPressRef.current) {
+      window.clearTimeout(longPressRef.current.timer)
+      longPressRef.current = null
+    }
   }
   return (
     <section className={compact ? 'catalog-panel compact-catalog' : 'panel catalog-panel'}>
@@ -2257,113 +2365,149 @@ function QuestionCatalog({
         {questions.length} вопросов. Вес вопроса влияет на итоговую оценку компетенции, по умолчанию 1.
       </p>
       <div className="question-list">
-        {[...questionsByCompetency.entries()].map(([competency, compQuestions]) => (
+        {[...questionsByCompetency.entries()].map(([competency, compQuestions]) => {
+          const direction = compQuestions[0]?.direction ?? activeSection?.id ?? 'general'
+          return (
           <div className="competency-group" key={competency}>
             <div className="competency-group-head">
               <h3>{competency}</h3>
               {isOwner && (
-                <button className="icon-button" type="button" title="Добавить вопрос" onClick={() => addQuestion(competency)}>
+                <button className="icon-button" type="button" title="Добавить вопрос" onClick={() => addQuestion(competency, direction)}>
                   <Plus size={16} />
                 </button>
               )}
             </div>
-            {compQuestions.map((question, index) => (
-          <details key={question.id}>
-            <summary>
-              <span>{index + 1}. {question.text}</span>
-            </summary>
-            {isOwner ? (
-              <div className="question-editor">
-                <label>
-                  Вопрос
-                  <textarea
-                    rows={2}
-                    value={question.text}
-                    onChange={(event) => updateQuestion(question.id, { text: event.target.value })}
-                  />
-                </label>
-                <div className="question-editor-grid">
-                  <label>
-                    Компетенция
-                    <input
-                      value={question.competency}
-                      onChange={(event) => updateQuestion(question.id, { competency: event.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Направление
-                    <input
-                      value={question.direction}
-                      onChange={(event) => updateQuestion(question.id, { direction: event.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Вес
-                    <input
-                      min={0.1}
-                      step={0.1}
-                      type="number"
-                      value={question.weight ?? 1}
-                      onChange={(event) => updateQuestion(question.id, { weight: Number(event.target.value) })}
-                    />
-                  </label>
-                </div>
-                <div className="answer-editor-list">
-                  {question.answers.map((answer, answerIndex) => (
-                    <div className="answer-editor-row" key={`${question.id}-${answerIndex}`}>
-                      <input
-                        aria-label={`Вариант ${answerIndex + 1}`}
-                        value={answer}
-                        onChange={(event) => updateAnswer(question, answerIndex, event.target.value)}
-                      />
-                      <label className="radio-row">
-                        <input
-                          checked={question.correctIndex === answerIndex}
-                          type="radio"
-                          onChange={() => updateQuestion(question.id, { correctIndex: answerIndex })}
-                        />
-                        Верный
-                      </label>
-                      {question.answers.length > 2 && (
-                        <button
-                          className="icon-button danger-icon"
-                          type="button"
-                          title="Удалить вариант"
-                          onClick={() => deleteAnswer(question, answerIndex)}
-                        >
-                          <Trash2 size={16} />
+            {compQuestions.map((question, index) => {
+              const isOpen = openQuestionId === question.id
+              return (
+              <div
+                className={`question-drag-item${draggedId === question.id ? ' dragging' : ''}${dragOverId === question.id ? ' drag-over' : ''}`}
+                key={question.id}
+                draggable={isOwner}
+                onDragStart={() => handleDragStart(question.id)}
+                onDragOver={(e) => handleDragOver(e, question.id)}
+                onDrop={() => handleDrop(question.id)}
+                onDragEnd={handleDragEnd}
+                onTouchStart={() => isOwner && handleTouchStart(question.id)}
+                onTouchEnd={() => isOwner && handleTouchEnd(question.id)}
+                onTouchMove={handleTouchMove}
+              >
+                <button
+                  className={`accordion-trigger${isOpen ? ' open' : ''}`}
+                  type="button"
+                  onClick={() => setOpenQuestionId(isOpen ? null : question.id)}
+                >
+                  <span>{index + 1}. {question.text}</span>
+                </button>
+                {isOpen && (
+                  <div className="accordion-body">
+                  {isOwner ? (
+                    <div className="question-editor">
+                      <div className="question-text-weight-row">
+                        <label>
+                          Вопрос
+                          <textarea
+                            rows={2}
+                            value={question.text}
+                            onChange={(event) => updateQuestion(question.id, { text: event.target.value })}
+                          />
+                        </label>
+                        <label>
+                          Вес
+                          <input
+                            min={0.1}
+                            step={0.1}
+                            type="number"
+                            value={question.weight ?? 1}
+                            onChange={(event) => updateQuestion(question.id, { weight: Number(event.target.value) })}
+                          />
+                        </label>
+                      </div>
+                      <div className="answer-editor-list">
+                        {question.answers.map((answer, answerIndex) => (
+                          <div className="answer-editor-row" key={`${question.id}-${answerIndex}`}>
+                            <input
+                              aria-label={`Вариант ${answerIndex + 1}`}
+                              value={answer}
+                              onChange={(event) => updateAnswer(question, answerIndex, event.target.value)}
+                            />
+                            <label className="radio-row">
+                              <input
+                                checked={question.correctIndex === answerIndex}
+                                type="radio"
+                                onChange={() => updateQuestion(question.id, { correctIndex: answerIndex })}
+                              />
+                              Верный
+                            </label>
+                            {question.answers.length > 2 && (
+                              <button
+                                className="icon-button danger-icon"
+                                type="button"
+                                title="Удалить вариант"
+                                onClick={() => deleteAnswer(question, answerIndex)}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="form-actions">
+                        <button className="secondary compact" type="button" onClick={() => addAnswer(question)}>
+                          Добавить вариант
                         </button>
-                      )}
+                        <button className="danger compact" type="button" onClick={() => deleteQuestion(question.id)}>
+                          <Trash2 size={16} />
+                          Удалить вопрос
+                        </button>
+                      </div>
                     </div>
-                  ))}
-                </div>
-                <div className="form-actions">
-                  <button className="secondary compact" type="button" onClick={() => addAnswer(question)}>
-                    Добавить вариант
-                  </button>
-                  <button className="danger compact" type="button" onClick={() => deleteQuestion(question.id)}>
-                    <Trash2 size={16} />
-                    Удалить вопрос
-                  </button>
-                </div>
+                  ) : (
+                    <ol>
+                      {question.answers.map((answer, answerIndex) => (
+                        <li
+                          className={answerIndex === question.correctIndex ? 'correct-answer' : ''}
+                          key={`${question.id}-${answerIndex}`}
+                        >
+                          {answer}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                  </div>
+                )}
               </div>
-            ) : (
-              <ol>
-                {question.answers.map((answer, answerIndex) => (
-                  <li
-                    className={answerIndex === question.correctIndex ? 'correct-answer' : ''}
-                    key={`${question.id}-${answerIndex}`}
-                  >
-                    {answer}
-                  </li>
-                ))}
-              </ol>
-            )}
-          </details>
-            ))}
+              )
+            })}
           </div>
-        ))}
+          )
+        })}
       </div>
+      {isOwner && (
+        <div style={{ marginTop: 14 }}>
+          {showAddCompetency ? (
+            <div className="add-competency-row">
+              <input
+                placeholder="Название компетенции"
+                value={newCompetencyName}
+                onChange={(e) => setNewCompetencyName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addCompetency()}
+              />
+              <button className="primary compact" type="button" onClick={addCompetency}>
+                Добавить
+              </button>
+              <button className="ghost compact" type="button" onClick={() => { setShowAddCompetency(false); setNewCompetencyName('') }}>
+                Отмена
+              </button>
+            </div>
+          ) : (
+            <button className="secondary compact" type="button" onClick={() => setShowAddCompetency(true)}>
+              <Plus size={16} />
+              Добавить компетенцию
+            </button>
+          )}
+        </div>
+      )}
     </section>
   )
 }
@@ -2385,6 +2529,22 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
   const currentQuestion = session ? questions[session.currentIndex] : undefined
   const finished = session?.status === 'completed'
   const terminated = session?.status === 'terminated'
+
+  const shuffledIndices = useMemo(() => {
+    if (!currentQuestion) return []
+    let seed = 0
+    for (let i = 0; i < currentQuestion.id.length; i++) seed = ((seed << 5) - seed + currentQuestion.id.charCodeAt(i)) | 0
+    seed = seed ^ (session?.currentIndex ?? 0)
+    const seededRandom = () => { seed = (seed * 1664525 + 1013904223) | 0; return (seed >>> 0) / 4294967296 }
+    const neZnayuIdx = currentQuestion.answers.findIndex((a) => a === 'Не знаю')
+    const indices = currentQuestion.answers.map((_, i) => i).filter((i) => i !== neZnayuIdx)
+    for (let i = indices.length - 1; i > 0; i--) {
+      const j = Math.floor(seededRandom() * (i + 1));
+      [indices[i], indices[j]] = [indices[j], indices[i]]
+    }
+    if (neZnayuIdx !== -1) indices.push(neZnayuIdx)
+    return indices
+  }, [currentQuestion, session?.currentIndex])
 
   useEffect(() => {
     if (!firebaseEnabled) return undefined
@@ -2550,9 +2710,9 @@ function CandidateApp({ sessionId }: { sessionId: string }) {
         </div>
         <h1>{currentQuestion?.text}</h1>
         <div className="answer-options">
-          {currentQuestion?.answers.map((answer, index) => (
-            <button type="button" key={`${currentQuestion.id}-${index}`} onClick={() => submitAnswer(index)}>
-              {answer}
+          {shuffledIndices.map((originalIndex) => (
+            <button type="button" key={`${currentQuestion?.id}-${originalIndex}`} onClick={() => submitAnswer(originalIndex)}>
+              {currentQuestion?.answers[originalIndex]}
             </button>
           ))}
         </div>
